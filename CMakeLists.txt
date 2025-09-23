@@ -28,6 +28,8 @@ find_package(Gaudi REQUIRED)
 find_package(Delphes REQUIRED)
 find_package(GSL REQUIRED)
 find_package(PandoraSDK REQUIRED)
+find_package(k4SimGeant4 REQUIRED) # added by Jona
+
 #---------------------------------------------------------------
 
 include(cmake/Key4hepConfig.cmake)
@@ -44,6 +46,7 @@ add_subdirectory(DCHdigi)
 add_subdirectory(ARCdigi)
 add_subdirectory(VTXdigi)
 set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake ${CMAKE_MODULE_PATH})
+add_subdirectory(SemiconductorDigi_Allpix2)
 add_subdirectory(Tracking)
 
 include(cmake/CreateProjectConfig.cmake)
