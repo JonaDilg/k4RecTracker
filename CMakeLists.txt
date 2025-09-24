@@ -46,7 +46,7 @@ add_subdirectory(DCHdigi)
 add_subdirectory(ARCdigi)
 add_subdirectory(VTXdigi)
 set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake ${CMAKE_MODULE_PATH})
-add_subdirectory(SemiconductorDigi_Allpix2)
+add_subdirectory(VTXdigi_Allpix2)
 add_subdirectory(Tracking)
 
 include(cmake/CreateProjectConfig.cmake)

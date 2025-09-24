@@ -19,7 +19,7 @@ geoservice.detectors = [os.environ["K4GEO"]+"/FCCee/CLD/compact/CLD_o2_v07/CLD_o
 geoservice.OutputLevel = INFO
 geoservice.EnableGeant4Geo = False
 
-digi = SemiconductorDigi_Allpix2()
+digi = VTXdigi_Allpix2()
 digi.SubDetectorName = "Vertex"
 digi.IsStrip = False
 digi.ResolutionU = [0.003, 0.003, 0.003, 0.003, 0.003, 0.003]

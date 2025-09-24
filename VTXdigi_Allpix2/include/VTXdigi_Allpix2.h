@@ -37,7 +37,7 @@
 #include <string> // added by Jona
 #include <vector>
 
-/** @class SemiconductorDigi_Allpix2
+/** @class VTXdigi_Allpix2
  *
  * Creates TrackerHits from SimTrackerHits. Produces clusters from simHits, outputs either the cluster centre or all hits in the cluster as digitized hits.
  *
@@ -48,13 +48,15 @@
 
 
 
-struct SemiconductorDigi_Allpix2 final : k4FWCore::MultiTransformer <std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> (const edm4hep::SimTrackerHitCollection&, const edm4hep::EventHeaderCollection&)> {
+struct VTXdigi_Allpix2 final 
+  : k4FWCore::MultiTransformer 
+    <std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> (const edm4hep::SimTrackerHitCollection&, const edm4hep::EventHeaderCollection&)> {
 
-  SemiconductorDigi_Allpix2(const std::string& name, ISvcLocator* svcLoc);
+  VTXdigi_Allpix2(const std::string& name, ISvcLocator* svcLoc);
   
   StatusCode initialize() override;
 
-  std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> operator()(const edm4hep::SimTrackerHitCollection& simTrackerHits, const edm4hep::EventHeaderCollection& headers) const override;
+  std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> operator() (const edm4hep::SimTrackerHitCollection& simTrackerHits, const edm4hep::EventHeaderCollection& headers) const override;
 
 private:
   Gaudi::Property<std::string> m_subDetName{this, "SubDetectorName", "VXD", "Name of the subdetector"};
@@ -63,16 +65,3 @@ private:
   SmartIF<IGeoSvc> m_geoSvc;
   SmartIF<IUniqueIDGenSvc> m_uidSvc;
 };
-
-StatusCode SemiconductorDigi_Allpix2::initialize() {
-  return StatusCode::SUCCESS;
-}
-
-std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> SemiconductorDigi_Allpix2::operator()
-  (const edm4hep::SimTrackerHitCollection& simTrackerHits, const edm4hep::EventHeaderCollection& headers) const {
-    
-  auto seed = m_uidSvc->getUniqueID(headers[0].getEventNumber(), headers[0].getRunNumber(), this->name());
-  debug() << "Using seed " << seed << " for event " << headers[0].getEventNumber() << " and run " << headers[0].getRunNumber() << endmsg;
-
-  return std::make_tuple(edm4hep::TrackerHitPlaneCollection(), edm4hep::TrackerHitSimTrackerHitLinkCollection());
-}
