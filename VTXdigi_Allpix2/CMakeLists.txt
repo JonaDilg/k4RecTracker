@@ -1,4 +1,4 @@
-set(PackageName SemiconductorDigi_Allpix2)
+set(PackageName VTXdigi_Allpix2)
 
 project(${PackageName})
 
@@ -42,6 +42,6 @@ install(TARGETS ${PackageName}
 
 install(FILES ${scripts} DESTINATION test)
 
-SET(test_name "test_runSemiconductorDigi_Allpix2")
-ADD_TEST(NAME ${test_name} COMMAND k4run test/runSemiconductorDigi_Allpix2.py)
+SET(test_name "test_runVTXdigi_Allpix2")
+ADD_TEST(NAME ${test_name} COMMAND k4run test/runVTXdigi_Allpix2.py)
 set_test_env(${test_name})
