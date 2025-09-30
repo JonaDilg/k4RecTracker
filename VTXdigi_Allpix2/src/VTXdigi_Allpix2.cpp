@@ -78,8 +78,7 @@ StatusCode VTXdigi_Allpix2::initialize() {
   *  - a vector of values, one per layer
   *    -> check that the number of entries matches the number of layers in the geometry
   */ 
-if (m_pixelPitchU.value().size() == 1 && m_pixelPitchV.value().size() == 1 && 
- m_pixelCount_u.value().size() == 1 && m_pixelCount_v.value().size() == 1) {
+  if (m_pixelPitchU.value().size() == 1 && m_pixelPitchV.value().size() == 1 && m_pixelCount_u.value().size() == 1 && m_pixelCount_v.value().size() == 1) {
     // single value for all layers, rewrite to vector of correct size
     m_pixelPitchU.value().resize(m_layerCount, m_pixelPitchU.value()[0]);
     m_pixelPitchV.value().resize(m_layerCount, m_pixelPitchV.value()[0]);
@@ -87,13 +86,35 @@ if (m_pixelPitchU.value().size() == 1 && m_pixelPitchV.value().size() == 1 &&
     m_pixelCount_v.value().resize(m_layerCount, m_pixelCount_v.value()[0]);
     debug() << " - found single pixel pitch and pixel count values, applying them to all layers" << endmsg;
   }
-else if (m_pixelPitchU.value().size() == m_layerCount && m_pixelPitchV.value().size() == m_layerCount && m_pixelCount_u.value().size() == m_layerCount && m_pixelCount_v.value().size() == m_layerCount) {
-    // one entry per layer
-    debug() << " - found pixel pitch and pixel count values for all " << m_layerCount << " layers" << endmsg;
-  }
+  else if (m_pixelPitchU.value().size() == m_layerCount && m_pixelPitchV.value().size() == m_layerCount && m_pixelCount_u.value().size() == m_layerCount && m_pixelCount_v.value().size() == m_layerCount) {
+      // one entry per layer
+      debug() << " - found pixel pitch and pixel count values for all " << m_layerCount << " layers" << endmsg;
+    }
   else {
     error() << " - Pixel pitch and count must be given either as a single value for all layers (in brackets though: []) or as a vector with one entry per layer. Abort." << endmsg;
     return StatusCode::FAILURE;
+  }
+
+
+  // -- import charge sharing kernels --
+
+  debug() << " - Importing charge sharing kernels..." << endmsg;
+  m_chargeSharingKernels = std::make_unique<ChargeSharingKernels>(m_InPixelBinCountU.value(), m_InPixelBinCountV.value(), m_InPixelBinCountW.value(), m_KernelSize.value());
+
+  // TODO: read the kernels from file. Instead, set gaussian kernels for now
+
+  const std::vector<double> inputKernel = { // 3x3 kernel, gaussian
+    1./16., 2./16., 1./16.,
+    2./16., 4./16., 2./16.,
+    1./16., 2./16., 1./16.
+  };
+
+  for (int i_u=0; i_u<m_InPixelBinCountU.value(); i_u++) {
+    for (int i_v=0; i_v<m_InPixelBinCountV.value(); i_v++) {
+      for (int i_w=0; i_w<m_InPixelBinCountW.value(); i_w++) {
+        m_chargeSharingKernels->SetKernel(i_u, i_v, i_w, inputKernel);
+      }
+    }
   }
 
   // TODO: check that pixel pitch and count match sensor size in geometry (I am not sure how to get the sensor size from the geometry though, does seem to be a bit more general, subDetectors have children that might or might not be layers) ~ Jona 2025-09

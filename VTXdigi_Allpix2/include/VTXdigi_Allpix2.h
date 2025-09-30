@@ -33,6 +33,7 @@
 
 
 #include "TRandom2.h" // added by Jona
+#include "TMatrixD.h" // added by Jona - for storing the kernel
 
 #include <string> // added by Jona
 #include <vector>
@@ -137,6 +138,13 @@ private:
 
   Gaudi::Property<int> m_layerCount{this, "LayerCount", 5, "Number of layers in the subdetector. Used to validate the size of the pixel pitch and count vectors."};
 
+  Gaudi::Property<int> m_KernelSize{this, "KernelSize", 3, "Size of the charge spreading kernel imported from Allpix2 (ie. 3 for 3x3 kernel) Must be an odd integer >= 3."};
+  Gaudi::Property<float> m_Threshold{this, "Threshold", 0.6, "Threshold in keV for a pixel to fire (1 keV = 274 eh-pairs)"};
+
+  Gaudi::Property<int> m_InPixelBinCountU{this, "InPixelBinCountU", 3, "Number of bins per pixel in u direction for charge deposition. Must agree with the imported Kernel map."};
+  Gaudi::Property<int> m_InPixelBinCountV{this, "InPixelBinCountV", 3, "Number of bins per pixel in v direction for charge deposition. Must agree with the imported Kernel map."};
+  Gaudi::Property<int> m_InPixelBinCountW{this, "InPixelBinCountW", 3, "Number of bins per pixel in w (vertical) direction for charge deposition. Must agree with the imported Kernel map."};
+
   // Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). Defaults to no transformation.
   Gaudi::Property<std::string> m_localNormalVectorDir{this, "LocalNormalVectorDir", "", "Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). If defined correctly, the local frame is transformed such that z is orthogonal to the sensor plane."};
 
@@ -159,7 +167,69 @@ private:
 
   mutable std::unordered_set<int> m_initialSensorSizeCheckPassed; // whether the check that the pixel pitch and count match the sensor size in the geometry has been done and passed
 
-  
-  // -- per-Evt variables (bin of shame...) --
+  // class to store the charge sharing kernel for each in-pixel bin
+  struct ChargeSharingKernels {
+    ChargeSharingKernels(int& binCountU, int& binCountV, int& binCountW, int& kernelSize) : m_binCountU(binCountU), m_binCountV(binCountV), m_binCountW(binCountW), m_kernelSize(kernelSize) {
+      if (kernelSize < 3 || kernelSize % 2 == 0)
+        throw std::runtime_error("ChargeSharingKernel: Kernel size must be an odd integer >= 3, but is " + std::to_string(kernelSize) + ".");
 
+      m_kernels.resize(binCountU * binCountV * binCountW);
+      for (auto& kernel : m_kernels) {
+        kernel.resize(kernelSize*kernelSize, 0.);
+      }
+    }
+    
+
+    /** Set the charge sharing kernel for a specific in-pixel bin 
+     * @param values A flat vector containing the kernel values in row-major order (ie. row-by-row) (length must be kernelSize*kernelSize)
+     */
+    void SetKernel(const int i_u, const int i_v, const int i_w, const std::vector<double>& values) {
+      if (static_cast<int>(values.size()) != m_kernelSize*m_kernelSize)
+        throw std::runtime_error("ChargeSharingKernel::SetKernel: values size (" + std::to_string(values.size()) + ") does not match kernel size (" + std::to_string(m_kernelSize*m_kernelSize) + ")");
+
+      const int index = _index(i_u, i_v, i_w);
+      std::vector<double>& kernel = m_kernels[index];
+
+      for (int row = 0; row < m_kernelSize; ++row) {
+        for (int col = 0; col < m_kernelSize; ++col) {
+          kernel[col * m_kernelSize + row] = values[row*m_kernelSize + col];
+        }
+      }
+    }
+
+    /** Access kernel as const reference */
+    const std::vector<double>& GetKernel(int i_u, int i_v, int i_w) const {
+      return m_kernels[_index(i_u, i_v, i_w)];
+    }
+
+    /** Access a specific entry of a kernel */
+    double GetKernelEntry(int i_u, int i_v, int i_w, int i_col, int i_row) const {
+      if (i_col < 0 || i_col >= m_kernelSize || i_row < 0 || i_row >= m_kernelSize)
+        throw std::runtime_error("GetKernelEntry: col/row out of range");
+      const auto& kernel = GetKernel(i_u, i_v, i_w);
+      return kernel[i_col * m_kernelSize + i_row];
+    }
+
+  private:
+    int m_binCountU, m_binCountV, m_binCountW;
+    int m_kernelSize;
+    /** Vector of kernels, one per in-pixel bin
+     *  Kernel-indexing is col-major (ie. i = col * size + row) */
+    std::vector<std::vector<double>> m_kernels; 
+
+    int _index (int i_u, int i_v, int i_w) const {
+      if (i_u < 0 || i_u >= m_binCountU)
+        throw std::runtime_error("ChargeSharingKernel::SetKernel: i_u (" + std::to_string(i_u) + ") out of range");
+      if (i_v < 0 || i_v >= m_binCountV)
+        throw std::runtime_error("ChargeSharingKernel::SetKernel: i_v (" + std::to_string(i_v) + ") out of range");
+      if (i_w < 0 || i_w >= m_binCountW)
+        throw std::runtime_error("ChargeSharingKernel::SetKernel: i_w (" + std::to_string(i_w) + ") out of range");
+
+      return i_u + m_binCountU * (i_v + m_binCountV * i_w); 
+    }
+
+  }; // struct ChargeSharingKernel
+
+  std::unique_ptr<ChargeSharingKernels> m_chargeSharingKernels; // the charge sharing kernel
+  // TODO: implement having a kernel per layer (array of unique_ptr ?)
 };
