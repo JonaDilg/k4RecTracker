@@ -78,15 +78,15 @@ StatusCode VTXdigi_Allpix2::initialize() {
   *  - a vector of values, one per layer
   *    -> check that the number of entries matches the number of layers in the geometry
   */ 
-  if (m_pixelPitchU.value().size() == 1 && m_pixelPitchV.value().size() == 1 && m_pixelCount_u.value().size() == 1 && m_pixelCount_v.value().size() == 1) {
+  if (m_pixelPitch_u.value().size() == 1 && m_pixelPitch_v.value().size() == 1 && m_pixelCount_u.value().size() == 1 && m_pixelCount_v.value().size() == 1) {
     // single value for all layers, rewrite to vector of correct size
-    m_pixelPitchU.value().resize(m_layerCount, m_pixelPitchU.value()[0]);
-    m_pixelPitchV.value().resize(m_layerCount, m_pixelPitchV.value()[0]);
+    m_pixelPitch_u.value().resize(m_layerCount, m_pixelPitch_u.value()[0]);
+    m_pixelPitch_v.value().resize(m_layerCount, m_pixelPitch_v.value()[0]);
     m_pixelCount_u.value().resize(m_layerCount, m_pixelCount_u.value()[0]);
     m_pixelCount_v.value().resize(m_layerCount, m_pixelCount_v.value()[0]);
     debug() << " - found single pixel pitch and pixel count values, applying them to all layers" << endmsg;
   }
-  else if (m_pixelPitchU.value().size() == m_layerCount && m_pixelPitchV.value().size() == m_layerCount && m_pixelCount_u.value().size() == m_layerCount && m_pixelCount_v.value().size() == m_layerCount) {
+  else if (m_pixelPitch_u.value().size() == m_layerCount && m_pixelPitch_v.value().size() == m_layerCount && m_pixelCount_u.value().size() == m_layerCount && m_pixelCount_v.value().size() == m_layerCount) {
       // one entry per layer
       debug() << " - found pixel pitch and pixel count values for all " << m_layerCount << " layers" << endmsg;
     }
@@ -99,20 +99,26 @@ StatusCode VTXdigi_Allpix2::initialize() {
   // -- import charge sharing kernels --
 
   debug() << " - Importing charge sharing kernels..." << endmsg;
-  m_chargeSharingKernels = std::make_unique<ChargeSharingKernels>(m_InPixelBinCountU.value(), m_InPixelBinCountV.value(), m_InPixelBinCountW.value(), m_KernelSize.value());
+  m_chargeSharingKernels = std::make_unique<ChargeSharingKernels>(m_InPixelBinCount_u.value(), m_InPixelBinCount_v.value(), m_InPixelBinCount_w.value(), m_KernelSize.value());
 
   // TODO: read the kernels from file. Instead, set gaussian kernels for now
 
-  const std::vector<double> inputKernel = { // 3x3 kernel, gaussian
+  const std::vector<double> inputKernel_Gaussian = { // 3x3 kernel, gaussian
     1./16., 2./16., 1./16.,
     2./16., 4./16., 2./16.,
     1./16., 2./16., 1./16.
   };
 
-  for (int i_u=0; i_u<m_InPixelBinCountU.value(); i_u++) {
-    for (int i_v=0; i_v<m_InPixelBinCountV.value(); i_v++) {
-      for (int i_w=0; i_w<m_InPixelBinCountW.value(); i_w++) {
-        m_chargeSharingKernels->SetKernel(i_u, i_v, i_w, inputKernel);
+  const std::vector<double> inputKernel_Basic = { // 3x3 kernel, double gaussian
+    0,0,0,
+    0,1,0,
+    0,0,0
+  };
+
+  for (int i_u=0; i_u<m_InPixelBinCount_u.value(); i_u++) {
+    for (int i_v=0; i_v<m_InPixelBinCount_v.value(); i_v++) {
+      for (int i_w=0; i_w<m_InPixelBinCount_w.value(); i_w++) {
+        m_chargeSharingKernels->SetKernel(i_u, i_v, i_w, inputKernel_Basic);
       }
     }
   }
@@ -148,8 +154,8 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
 
     // -- gather information about the simHit --    
     dd4hep::DDSegmentation::CellID cellID = simHit.getCellID(); // TODO: apply 64-bit length mask as done in DDPlanarDigi.cpp? ~ Jona 2025-09
-    dd4hep::rec::Vector3D simHitGlobalPosition = Vector3dConvert(simHit.getPosition());
-    dd4hep::rec::Vector3D simHitLocalPosition = GlobalToLocal(simHitGlobalPosition, cellID);
+    dd4hep::rec::Vector3D simHitGlobalPos = Vector3dConvert(simHit.getPosition());
+    dd4hep::rec::Vector3D simHitLocalPos = GlobalToLocal(simHitGlobalPos, cellID);
     int layer = m_cellIDdecoder->get(cellID, "layer");
     double eDeposition = simHit.getEDep() * (dd4hep::GeV / dd4hep::keV); // convert to keV
     
@@ -157,7 +163,7 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
 
     debug() << " - FOUND simHit in cellID " << simHit.getCellID() << ", Edep = " << eDeposition << " keV, path length = " << simHit.getPathLength()*1000 << " um" << endmsg;
     debug() << "   at position " << simHit.getPosition().x << " mm, " << simHit.getPosition().y << " mm, " << simHit.getPosition().z << " mm" << endmsg;
-    debug() << "   with distance " << surface->distance(dd4hep::mm * simHitGlobalPosition) << " mm to surface" << endmsg; // dd4hep expects cm, simHitGlobalPosition is in mm. dd4hep::cm=0.1
+    debug() << "   with distance " << surface->distance(dd4hep::mm * simHitGlobalPos) << " mm to surface" << endmsg; // dd4hep expects cm, simHitGlobalPosition is in mm. dd4hep::cm=0.1
     
     // -- apply cuts --
     if (!ApplySimHitCuts(layer, eDeposition)) {
@@ -199,22 +205,23 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
     const int size_u = m_pixelCount_u[layer];
     const int size_v = m_pixelCount_v[layer];
 
-
-    // -- loop over the segments, assign charges to pixels --
+    // -- loop over the segments, assign charges to pixels according to kernel--
 
     debug() << "   - Looping over segments, assigning charges to pixels" << endmsg;
     std::vector<double> pixelCharge(size_u * size_v, 0.0); // array to store the charge assigned to each pixel, reset for each simHit. Index = i_u + i_v*size_u (Use 1-d vector to avoid overhead)
     int i_u, i_v; // pixel indices
-    dd4hep::rec::Vector3D segmentPosition; // in mm
+    dd4hep::rec::Vector3D segmentPos; // in mm
     for (int i=0; i<segmentNumber; i++) {
-      segmentPosition = ((static_cast<double>(i)/segmentNumber)*simHitPath) + simHitEntryPoint; // in mm
-      // debug() << "     - Processing segment " << i << endmsg;
-      // debug() << "       - Path = " << simHitPath[0] << ", " << simHitPath[1] << ", " << simHitPath[2] << " mm" << endmsg;
-      // debug() << "       - Position " << segmentPosition[0] << ", " << segmentPosition[1] << ", " << segmentPosition[2] << " mm" << endmsg;
+      segmentPos = ((static_cast<double>(i)/segmentNumber)*simHitPath) + simHitEntryPoint; // in mm
+      debug() << "     - Processing segment " << i << endmsg;
       
       // get pixel indices (i_u and i_v) for this segment
-      i_u = GetBinIndex(segmentPosition[0], -0.5*length_u, m_pixelPitchU[layer], m_pixelCount_u[layer]);
-      i_v = GetBinIndex(segmentPosition[1], -0.5*length_v, m_pixelPitchV[layer], m_pixelCount_v[layer]);
+      i_u = GetBinIndex(segmentPos[0], -0.5*length_u, m_pixelPitch_u[layer], m_pixelCount_u[layer]);
+      i_v = GetBinIndex(segmentPos[1], -0.5*length_v, m_pixelPitch_v[layer], m_pixelCount_v[layer]);
+
+      // get the in-pixel position (for charge sharing kernel)
+      
+
       // debug() << "       - Pixel indices (" << i_u << ", " << i_v << ")" << endmsg;
       if (i_u==-1 || i_v==-1) {
         debug() << "       - Dismissed segment (is outside sensor area)" << endmsg;
@@ -242,9 +249,9 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
           CreateDigiHit(simHit, digiHits, digiHitsLinks, pixelCharge[i_u + i_v*size_u], pixelCenter);
           nHitsCreated++;
 
-          ++ (*m_histograms[hist_DisplacementU])[1000 * (pixelCenter[0] - simHitGlobalPosition[0])]; // in um
-          ++ (*m_histograms[hist_DisplacementV])[1000 * (pixelCenter[1] - simHitGlobalPosition[1])]; // in um
-          ++ (*m_histograms[hist_DisplacementR])[1000 * sqrt( (pixelCenter[0] - simHitGlobalPosition[0])*(pixelCenter[0] - simHitGlobalPosition[0]) + (pixelCenter[1] - simHitGlobalPosition[1])*(pixelCenter[1] - simHitGlobalPosition[1]) + (pixelCenter[2] - simHitGlobalPosition[2])*(pixelCenter[2] - simHitGlobalPosition[2]) )]; // in um
+          ++ (*m_histograms[hist_DisplacementU])[1000 * (pixelCenter[0] - simHitGlobalPos[0])]; // in um
+          ++ (*m_histograms[hist_DisplacementV])[1000 * (pixelCenter[1] - simHitGlobalPos[1])]; // in um
+          ++ (*m_histograms[hist_DisplacementR])[1000 * sqrt( (pixelCenter[0] - simHitGlobalPos[0])*(pixelCenter[0] - simHitGlobalPos[0]) + (pixelCenter[1] - simHitGlobalPos[1])*(pixelCenter[1] - simHitGlobalPos[1]) + (pixelCenter[2] - simHitGlobalPos[2])*(pixelCenter[2] - simHitGlobalPos[2]) )]; // in um
         }
       }
     }
@@ -266,6 +273,8 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
 
   return std::make_tuple(std::move(digiHits), std::move(digiHitsLinks));
 } // operator()
+
+
 
 
 
@@ -379,12 +388,12 @@ void VTXdigi_Allpix2::InitialSensorSizeCheck(const edm4hep::SimTrackerHit& simHi
   const double length_v = surface->length_along_v() * 10; // convert to mm
 
   // check sensor size in u, v
-  if ( abs(length_u - m_pixelPitchU[layer]*m_pixelCount_u[layer]) > 0.00001 ) { // numverical tolerance of 0.01 um
-    error() << "Sensor size in u (" << length_u << " mm) does not match pixel pitch * count (" << m_pixelPitchU[layer] << " mm * " << m_pixelCount_u[layer] << ") = " << (m_pixelPitchU[layer] * m_pixelCount_u[layer]) << " mm for layer " << layer << " (defined in options file). Abort." << endmsg;
+  if ( abs(length_u - m_pixelPitch_u[layer]*m_pixelCount_u[layer]) > 0.00001 ) { // numverical tolerance of 0.01 um
+    error() << "Sensor size in u (" << length_u << " mm) does not match pixel pitch * count (" << m_pixelPitch_u[layer] << " mm * " << m_pixelCount_u[layer] << ") = " << (m_pixelPitch_u[layer] * m_pixelCount_u[layer]) << " mm for layer " << layer << " (defined in options file). Abort." << endmsg;
     throw std::runtime_error("VTXdigi_Allpix2::InitialSensorSizeCheck: Sensor size in u does not match pixel pitch * count");
   }
-  if ( abs(length_v - m_pixelPitchV[layer]*m_pixelCount_v[layer]) > 0.00001 ) { // numverical tolerance of 0.01 um
-    error() << "Sensor size in v (" << length_v << " mm) does not match pixel pitch * count (" << m_pixelPitchV[layer] << " mm * " << m_pixelCount_v[layer] << ") = " << (m_pixelPitchV[layer] * m_pixelCount_v[layer]) << " mm for layer " << layer << " (defined in options file). Abort." << endmsg;
+  if ( abs(length_v - m_pixelPitch_v[layer]*m_pixelCount_v[layer]) > 0.00001 ) { // numverical tolerance of 0.01 um
+    error() << "Sensor size in v (" << length_v << " mm) does not match pixel pitch * count (" << m_pixelPitch_v[layer] << " mm * " << m_pixelCount_v[layer] << ") = " << (m_pixelPitch_v[layer] * m_pixelCount_v[layer]) << " mm for layer " << layer << " (defined in options file). Abort." << endmsg;
     throw std::runtime_error("VTXdigi_Allpix2::InitialSensorSizeCheck: Sensor size in v does not match pixel pitch * count");
   }
   
@@ -400,8 +409,8 @@ dd4hep::rec::Vector3D VTXdigi_Allpix2::GetPixelCenter_Local(const int& i_u, cons
   const double length_u = surface.length_along_u() * 10; // convert to mm
   const double length_v = surface.length_along_v() * 10; // convert to mm
 
-  double posU = (-0.5*length_u) + (i_u + 0.5)*m_pixelPitchU[layer]; // in mm
-  double posV = (-0.5*length_v) + (i_v + 0.5)*m_pixelPitchV[layer]; // in mm
+  double posU = (-0.5*length_u) + (i_u + 0.5)*m_pixelPitch_u[layer]; // in mm
+  double posV = (-0.5*length_v) + (i_v + 0.5)*m_pixelPitch_v[layer]; // in mm
 
   return dd4hep::rec::Vector3D(posU, posV, 0); 
 }
@@ -430,7 +439,7 @@ std::tuple<dd4hep::rec::Vector3D, dd4hep::rec::Vector3D> VTXdigi_Allpix2::GetSim
 
   // Get the global position of the hit (defined by default in Geant4 as the mean between the entry and exit point in the active material) and apply unit transformation (translation matrix is stored in cm)
 
-  double simHitGlobalCentralPosition[3] = {simHit.getPosition().x, simHit.getPosition().y, simHit.getPosition().z}; // given in mm
+  double simHitGlobalCentralPos[3] = {simHit.getPosition().x, simHit.getPosition().y, simHit.getPosition().z}; // given in mm
 
   double simHitGlobalMomentum[3] = {simHit.getMomentum().x * dd4hep::GeV, simHit.getMomentum().y * dd4hep::GeV, simHit.getMomentum().z * dd4hep::GeV};
 
@@ -438,22 +447,12 @@ std::tuple<dd4hep::rec::Vector3D, dd4hep::rec::Vector3D> VTXdigi_Allpix2::GetSim
   const dd4hep::DDSegmentation::CellID& cellID = simHit.getCellID();
 
   TGeoHMatrix transformationMatrix = GetTransformationMatrix(cellID);
-  double simHitLocalCentralPosition[3] = {0, 0, 0};
+  double simHitLocalCentralPos[3] = {0, 0, 0};
   double simHitLocalMomentum[3] = {0, 0, 0};
 
-  // // get the simHit coordinate in cm in the sensor reference frame
-  // transformationMatrix.MasterToLocal(dd4hep::mm * simHitGlobalCentralPosition, simHitLocalCentralPosition); // matrix is stored in cm, simHitGlobalPosition in mm
-  // transformationMatrix.MasterToLocalVect(simHitGlobalMomentum, simHitLocalMomentum); // length is normalized later
+  // get the simHit coordinate in cm in the sensor reference frame
 
-  // // create vector of direction, normalized to path length
-  // dd4hep::rec::Vector3D simHitPath(simHitLocalMomentum[0], simHitLocalMomentum[1], simHitLocalMomentum[2]);
-  // simHitPath = (simHit.getPathLength() / simHitPath.r())*simHitPath; // normalize to path length
-
-  // // get vector of entry point position
-  // dd4hep::rec::Vector3D simHitEntryPoint(simHitLocalCentralPosition[0] / dd4hep::mm, simHitLocalCentralPosition[1] / dd4hep::mm, simHitLocalCentralPosition[2] / dd4hep::mm); // convert from cm to mm. This is the central point of the path as of now
-  // simHitEntryPoint = simHitEntryPoint - 0.5*simHitPath; // entry point is half a path-length upstream of central position
-
-  transformationMatrix.MasterToLocal(simHitGlobalCentralPosition, simHitLocalCentralPosition);
+  transformationMatrix.MasterToLocal(simHitGlobalCentralPos, simHitLocalCentralPos);
   transformationMatrix.MasterToLocalVect(simHitGlobalMomentum, simHitLocalMomentum);
 
   // create vector of direction, normalized to path length
@@ -461,7 +460,7 @@ std::tuple<dd4hep::rec::Vector3D, dd4hep::rec::Vector3D> VTXdigi_Allpix2::GetSim
   simHitPath = (simHit.getPathLength() / simHitPath.r())*simHitPath; // normalize to path length
 
   // get vector of entry point position
-  dd4hep::rec::Vector3D simHitEntryPoint(simHitLocalCentralPosition[0], simHitLocalCentralPosition[1], simHitLocalCentralPosition[2]); // This is the central point of the path as of now
+  dd4hep::rec::Vector3D simHitEntryPoint(simHitLocalCentralPos[0], simHitLocalCentralPos[1], simHitLocalCentralPos[2]); // This is the central point of the path as of now
   simHitEntryPoint = simHitEntryPoint - 0.5*simHitPath; // entry point is half a path-length upstream of central position
 
   // TODO: Maybe add a check that the point is inside the material or go to the closest material and do the same for exit point and then redefine the length (Jessy had this comment already) ~ Jona, 2025-09
