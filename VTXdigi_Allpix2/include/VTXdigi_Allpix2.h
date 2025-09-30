@@ -37,16 +37,24 @@
 #include <string> // added by Jona
 #include <vector>
 
+#include "GAUDI_VERSION.h"
+
+#if GAUDI_MAJOR_VERSION < 39 // don't really have a clue why we need this, assume it's important ~ Jona 2025-09
+namespace Gaudi::Accumulators {
+template <unsigned int ND, atomicity Atomicity = atomicity::full, typename Arithmetic = double>
+using StaticRootHistogram =
+    Gaudi::Accumulators::RootHistogramingCounterBase<ND, Atomicity, Arithmetic, naming::histogramString>;
+}
+#endif
+
 /** @class VTXdigi_Allpix2
  *
- * Creates TrackerHits from SimTrackerHits. Produces clusters from simHits, outputs either the cluster centre or all hits in the cluster as digitized hits.
+ * Creates trackerHits from simHits. Produces clusters from simHits, outputs either the cluster centre or all hits in the cluster as digitized hits.
  *
  *  @author Jona Dilg, Armin Ilg
  *  @date   2025-09
  *
  */
-
-
 
 struct VTXdigi_Allpix2 final 
   : k4FWCore::MultiTransformer 
@@ -56,12 +64,102 @@ struct VTXdigi_Allpix2 final
   
   StatusCode initialize() override;
 
-  std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> operator() (const edm4hep::SimTrackerHitCollection& simTrackerHits, const edm4hep::EventHeaderCollection& headers) const override;
+  std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> operator() (const edm4hep::SimTrackerHitCollection& simHits, const edm4hep::EventHeaderCollection& headers) const override;
 
 private:
+
+
+  // -- Transformation between global frame and local sensor frame
+
+  /** Get the transformation matrix to the local sensor frame */
+  TGeoHMatrix GetTransformationMatrix(const edm4hep::SimTrackerHit& simHit) const;
+  TGeoHMatrix GetTransformationMatrix(const dd4hep::DDSegmentation::CellID& cellID) const;
+
+  /** adjust the transformation matrix to the local sensor frame, so that it is x-u, y-v, z-n and right-handed. Uses user-input "LocalNormalVectorDir" */
+  void SetProperDirectFrame(TGeoHMatrix& sensorTransformMatrix) const;
+
+  /** Transform a global position to the local sensor frame of a hit, given its cellID */
+  dd4hep::rec::Vector3D GlobalToLocal(const dd4hep::rec::Vector3D& globalPos, const dd4hep::DDSegmentation::CellID& cellID) const;
+
+  /** Transform a local sensor position to the global frame, given the sensors cellID */
+  dd4hep::rec::Vector3D LocalToGlobal(const dd4hep::rec::Vector3D& localPos, const dd4hep::DDSegmentation::CellID& cellID) const;
+
+
+  // -- Helper functions --
+
+  /** Convert EDM4HEP vector to DD4HEP vector, and vice versa */
+  dd4hep::rec::Vector3D Vector3dConvert(edm4hep::Vector3d vec) const;
+  edm4hep::Vector3d Vector3dConvert(dd4hep::rec::Vector3D vec) const;
+
+  /** Check that the pixel pitch and count match the sensor size in the geometry
+   */
+  void InitialSensorSizeCheck(const edm4hep::SimTrackerHit& simHit) const;
+    
+  /** Apply cuts to a simHit. Returns true if the hit is accepted, false if dismissed. */
+  bool ApplySimHitCuts (int layer, double eDeposited) const;
+
+  /** Calculate the entry point and path vector of a simHit in local sensor frame. */
+  std::tuple<dd4hep::rec::Vector3D, dd4hep::rec::Vector3D> GetSimHitPath(const edm4hep::SimTrackerHit& simHit) const;
+
+  /**Given a histogram definition (x0, binWidth, nBins) and a value x, return the bin index in which x falls.
+   * Returns -1 if x is out of range.
+   * Bins are 0-indexed (vs ROOT's 1-indexing) */
+  int GetBinIndex(float x, float binX0, float binWidth, int binN) const;
+
+  /** Create a digitized hit */
+  void CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const double eDeposition, const dd4hep::rec::Vector3D& position) const;
+  void CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const double eDeposition, const edm4hep::Vector3d& position) const;
+  
+  /** Get the local position of a pixel center (u,v,0) */
+  dd4hep::rec::Vector3D GetPixelCenter_Local(const int& i_u, const int& i_v, const int& layer, const dd4hep::rec::ISurface& surface) const;
+
+
+
+  // -- Properties --
+
   Gaudi::Property<std::string> m_subDetName{this, "SubDetectorName", "VXD", "Name of the subdetector"};
   Gaudi::Property<bool> m_isStrip{this, "IsStrip", false, "Whether the hits are 1D strip hits"};
+  Gaudi::Property<double> m_minDepositedEnergy{this, "MinDepositedEnergy", 0.0, "Minimum energy (GeV) of SimTrackerHit to be digitized"};
+  Gaudi::Property<double> m_targetPathSegmentLength{this, "TargetPathSegmentLength", 0.002, "Length of the path segments, that the simHits path through a sensor is divided into. In mm. Defines the precision of the charge deposition along the path."};
 
-  SmartIF<IGeoSvc> m_geoSvc;
+  Gaudi::Property<std::string> m_geometryServiceName{this, "GeoSvcName", "GeoSvc", "The name of the GeoSvc instance"}; // what is this for?
+
+  Gaudi::Property<std::string> m_encodingStringVariable{this, "EncodingStringParameterName", "GlobalTrackerReadoutID", "The name of the DD4hep constant that contains the Encoding string for tracking detectors"};
+
+  Gaudi::Property<std::vector<int>> m_layersToDigitize{this, "LayersToDigitize", {}, "Which layers to digitize (0-indexed). If empty, all layers are digitized."};
+
+  // Sensor pitch and size (enter either a single value for all layers or a vector, containing one value per layer)
+  Gaudi::Property<std::vector<float>> m_pixelPitchU{this, "PixelPitchU", {0.025}, "Pixel pitch in direction of u in mm; either one per layer or one for all layers"};
+  Gaudi::Property<std::vector<float>> m_pixelPitchV{this, "PixelPitchV", {0.025}, "Pixel pitch in direction of v in mm; either one per layer or one for all layers"};
+
+  Gaudi::Property<std::vector<int>> m_pixelCount_u{this, "PixelCountU", {1024}, "Number of pixels in direction of u; either one per layer or one for all layers"};
+  Gaudi::Property<std::vector<int>> m_pixelCount_v{this, "PixelCountV", {1024}, "Number of pixels in direction of v; either one per layer or one for all layers"};
+
+  Gaudi::Property<int> m_layerCount{this, "LayerCount", 5, "Number of layers in the subdetector. Used to validate the size of the pixel pitch and count vectors."};
+
+  // Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). Defaults to no transformation.
+  Gaudi::Property<std::string> m_localNormalVectorDir{this, "LocalNormalVectorDir", "", "Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). If defined correctly, the local frame is transformed such that z is orthogonal to the sensor plane."};
+
+  // -- Services --
+  
+  SmartIF<IGeoSvc> m_geometryService;
+  // Decoder for the cellID
+  std::unique_ptr<dd4hep::DDSegmentation::BitFieldCoder> m_cellIDdecoder;
+
+  dd4hep::VolumeManager m_volumeManager; // volume manager to get the physical cell sensitive volume
   SmartIF<IUniqueIDGenSvc> m_uidSvc;
+
+  // -- Global variables --
+
+  const dd4hep::rec::SurfaceMap* m_surfaceMap;
+
+  enum { hist_hitE, hist_clusterSize, hist_EntryPointX, hist_EntryPointY, hist_EntryPointZ, hist_DisplacementU, hist_DisplacementV, hist_DisplacementR, histArrayLen }; // histogram indices. histArrayLen must be last
+
+  std::array<std::unique_ptr<Gaudi::Accumulators::StaticRootHistogram<1>>, histArrayLen> m_histograms; 
+
+  mutable std::unordered_set<int> m_initialSensorSizeCheckPassed; // whether the check that the pixel pitch and count match the sensor size in the geometry has been done and passed
+
+  
+  // -- per-Evt variables (bin of shame...) --
+
 };
