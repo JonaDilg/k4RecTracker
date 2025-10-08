@@ -37,6 +37,7 @@
 
 #include <string> // added by Jona
 #include <vector>
+#include <cmath> // for std::fmod
 
 #include "GAUDI_VERSION.h"
 
@@ -64,6 +65,7 @@ struct VTXdigi_Allpix2 final
   VTXdigi_Allpix2(const std::string& name, ISvcLocator* svcLoc);
   
   StatusCode initialize() override;
+  StatusCode finalize() override;
 
   std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> operator() (const edm4hep::SimTrackerHitCollection& simHits, const edm4hep::EventHeaderCollection& headers) const override;
 
@@ -107,6 +109,15 @@ private:
    * Bins are 0-indexed (vs ROOT's 1-indexing) */
   int GetBinIndex(float x, float binX0, float binWidth, int binN) const;
 
+  /** Get the pixel indices (i_u, i_v) for a given position inside the sensor */
+  std::tuple<int, int> GetPixelIndices(const dd4hep::rec::Vector3D& pos, const int& layer, const double& length_u, const double& length_v) const;
+
+  /** Get the in-pixel indices (j_u, j_v, j_w) for a given position inside the pixel and layer index
+   *  Assumption: each layer has only 1 type if sensor */
+  std::tuple<int, int, int> GetInPixelIndices(const dd4hep::rec::Vector3D& pos, const int& layer, const double length_u, const double length_v) const;
+
+  std::tuple<int, int, int, int, int> ProcessSegment(const dd4hep::rec::Vector3D& simHitEntryPoint, const dd4hep::rec::Vector3D& simHitPath, const int n, const int segmentNumber, const int layer, const double length_u, const double length_v) const;
+
   /** Create a digitized hit */
   void CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const double eDeposition, const dd4hep::rec::Vector3D& position) const;
   void CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const double eDeposition, const edm4hep::Vector3d& position) const;
@@ -127,26 +138,33 @@ private:
 
   Gaudi::Property<std::string> m_encodingStringVariable{this, "EncodingStringParameterName", "GlobalTrackerReadoutID", "The name of the DD4hep constant that contains the Encoding string for tracking detectors"};
 
-  Gaudi::Property<std::vector<int>> m_layersToDigitize{this, "LayersToDigitize", {}, "Which layers to digitize (0-indexed). If empty, all layers are digitized."};
-
+  
   // Sensor pitch and size (enter either a single value for all layers or a vector, containing one value per layer)
-  Gaudi::Property<std::vector<float>> m_pixelPitch_u{this, "PixelPitch_u", {0.025}, "Pixel pitch in direction of u in mm; either one per layer or one for all layers"};
-  Gaudi::Property<std::vector<float>> m_pixelPitch_v{this, "PixelPitch_v", {0.025}, "Pixel pitch in direction of v in mm; either one per layer or one for all layers"};
-
+  Gaudi::Property<std::vector<double>> m_pixelPitch_u{this, "PixelPitch_u", {0.025}, "Pixel pitch in direction of u in mm; either one per layer or one for all layers"};
+  Gaudi::Property<std::vector<double>> m_pixelPitch_v{this, "PixelPitch_v", {0.025}, "Pixel pitch in direction of v in mm; either one per layer or one for all layers"};
+  
   Gaudi::Property<std::vector<int>> m_pixelCount_u{this, "PixelCount_u", {1024}, "Number of pixels in direction of u; either one per layer or one for all layers"};
   Gaudi::Property<std::vector<int>> m_pixelCount_v{this, "PixelCount_v", {1024}, "Number of pixels in direction of v; either one per layer or one for all layers"};
-
+  
+  Gaudi::Property<std::vector<double>> m_sensorThickness{this, "SensorThickness", {0.05}, "Sensor thickness in mm; either one per layer or one for all layers"};
+  
+  
+  
   Gaudi::Property<int> m_layerCount{this, "LayerCount", 5, "Number of layers in the subdetector. Used to validate the size of the pixel pitch and count vectors."};
+  Gaudi::Property<std::vector<int>> m_layersToDigitize{this, "LayersToDigitize", {}, "Which layers to digitize (0-indexed). If empty, all layers are digitized."};
 
-  Gaudi::Property<int> m_KernelSize{this, "KernelSize", 3, "Size of the charge spreading kernel imported from Allpix2 (ie. 3 for 3x3 kernel) Must be an odd integer >= 3."};
-  Gaudi::Property<float> m_Threshold{this, "Threshold", 0.6, "Threshold in keV for a pixel to fire (1 keV = 274 eh-pairs)"};
+  Gaudi::Property<int> m_kernelSize{this, "KernelSize", 3, "Size of the charge spreading kernel imported from Allpix2 (ie. 3 for 3x3 kernel) Must be an odd integer >= 3."};
+  Gaudi::Property<float> m_threshold{this, "Threshold", 0.6, "Threshold in keV for a pixel to fire (1 keV = 274 eh-pairs)"};
 
-  Gaudi::Property<int> m_InPixelBinCount_u{this, "InPixelBinCount_u", 3, "Number of bins per pixel in u direction for charge deposition. Must agree with the imported Kernel map."};
-  Gaudi::Property<int> m_InPixelBinCount_v{this, "InPixelBinCount_v", 3, "Number of bins per pixel in v direction for charge deposition. Must agree with the imported Kernel map."};
-  Gaudi::Property<int> m_InPixelBinCount_w{this, "InPixelBinCount_w", 3, "Number of bins per pixel in w (vertical) direction for charge deposition. Must agree with the imported Kernel map."};
+  Gaudi::Property<int> m_inPixelBinCount_u{this, "InPixelBinCount_u", 3, "Number of bins per pixel in u direction for charge deposition. Must agree with the imported Kernel map."};
+  Gaudi::Property<int> m_inPixelBinCount_v{this, "InPixelBinCount_v", 3, "Number of bins per pixel in v direction for charge deposition. Must agree with the imported Kernel map."};
+  Gaudi::Property<int> m_inPixelBinCount_w{this, "InPixelBinCount_w", 3, "Number of bins per pixel in w (vertical) direction for charge deposition. Must agree with the imported Kernel map."};
 
   // Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). Defaults to no transformation.
   Gaudi::Property<std::string> m_localNormalVectorDir{this, "LocalNormalVectorDir", "", "Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). If defined correctly, the local frame is transformed such that z is orthogonal to the sensor plane."};
+
+  Gaudi::Property<bool> m_useGlobalKernel{this, "UseGlobalKernel", true, "Whether to use a single global kernel for all layers (true), or a layer-dependent kernel (false). If true, a kernel needs to be supplied via the GlobalKernel property."};
+  Gaudi::Property<std::vector<double>> m_globalKernel{this, "GlobalKernel", {}, "Flat vector containing the global charge sharing kernel in row-major order (ie. row-by-row). Length must be KernelSize*KernelSize. Only used if UseGlobalKernel is true."};
 
   // -- Services --
   
@@ -159,11 +177,48 @@ private:
 
   // -- Global variables --
 
+  
+  std::unordered_map<int, int> m_layerToIndex; // layer number (from cellID / m_layersToDigitize) to internal index (0...N-1, where N is the number of layers to digitize)
+
   const dd4hep::rec::SurfaceMap* m_surfaceMap;
 
-  enum { hist_hitE, hist_clusterSize, hist_EntryPointX, hist_EntryPointY, hist_EntryPointZ, hist_DisplacementU, hist_DisplacementV, hist_DisplacementR, histArrayLen }; // histogram indices. histArrayLen must be last
+  enum { 
+    counter_eventsRead, 
+    counter_eventsRejected_noSimHits, 
+    counter_eventsAccepted, 
+    counter_simHitsRead, 
+    counter_simHitsRejected_LayerNotToBeDigitized, 
+    counter_simHitsRejected_EnergyCut, 
+    counter_simHitsRejected_SurfaceDistToLarge, 
+    counter_simHitsRejected_OutsideSensor, 
+    counter_simHitsAccepted, 
+    counter_digiHitsCreated, 
+    counterArrayLen }; // counter indices.
 
+  mutable std::array<long unsigned int, counterArrayLen> m_counters = {0}; // array of counters, size counterArrayLen
+
+  enum { 
+    hist_hitE, 
+    hist_clusterSize, 
+    hist_EntryPointX, 
+    hist_EntryPointY, 
+    hist_EntryPointZ, 
+    hist_DisplacementU, 
+    hist_DisplacementV, 
+    hist_DisplacementR, 
+    hist_trackLength, 
+    hist_HitEnergyDifference, 
+    histArrayLen}; // histogram indices. histArrayLen must be last
   std::array<std::unique_ptr<Gaudi::Accumulators::StaticRootHistogram<1>>, histArrayLen> m_histograms; 
+
+enum { 
+  hist2d_hitMap_simHits,
+  hist2d_hitMap_digiHits, 
+  hist2d_hitMap_simHitDebug, 
+  hist2d_hitMap_digiHitDebug, 
+  hist2dArrayLen }; // 2D histogram indices. hist2dArrayLen must be last
+  std::vector<std::array<std::unique_ptr<Gaudi::Accumulators::StaticRootHistogram<2>>, hist2dArrayLen>> m_histograms2d;
+
 
   mutable std::unordered_set<int> m_initialSensorSizeCheckPassed; // whether the check that the pixel pitch and count match the sensor size in the geometry has been done and passed
 
@@ -187,26 +242,37 @@ private:
         throw std::runtime_error("ChargeSharingKernel::SetKernel: values size (" + std::to_string(values.size()) + ") does not match kernel size (" + std::to_string(m_kernelSize*m_kernelSize) + ")");
 
       const int index = _index(j_u, j_v, j_w);
-      std::vector<double>& kernel = m_kernels[index];
+      // std::vector<double>& kernel = m_kernels.at(index);
 
       for (int row = 0; row < m_kernelSize; ++row) {
         for (int col = 0; col < m_kernelSize; ++col) {
-          kernel[col * m_kernelSize + row] = values[row*m_kernelSize + col];
+          m_kernels.at(index).at(col * m_kernelSize + row) = values.at(row*m_kernelSize + col);
         }
       }
     }
 
     /** Access kernel as const reference */
     const std::vector<double>& GetKernel(int j_u, int j_v, int j_w) const {
+      if (j_u < 0 || j_u >= m_binCountU)
+        throw std::runtime_error("ChargeSharingKernel::GetKernel: j_u (= " + std::to_string(j_u) + ") out of range");
+      if (j_v < 0 || j_v >= m_binCountV)
+        throw std::runtime_error("ChargeSharingKernel::GetKernel: j_v (= " + std::to_string(j_v) + ") out of range");
+      if (j_w < 0 || j_w >= m_binCountW)
+        throw std::runtime_error("ChargeSharingKernel::GetKernel: j_w (= " + std::to_string(j_w) + ") out of range");
       return m_kernels[_index(j_u, j_v, j_w)];
     }
 
-    /** Access a specific entry of a kernel */
+    /** Access a specific entry of a kernel
+     * @param j_u, j_v, j_w In-pixel indices
+     * @param j_col, j_row Column and row of the kernel entry to access (go from -(kernelsize-1)/2 to +(kernelsize-1)/2)
+    */
     double GetKernelEntry(int j_u, int j_v, int j_w, int j_col, int j_row) const {
-      if (j_col < 0 || j_col >= m_kernelSize || j_row < 0 || j_row >= m_kernelSize)
-        throw std::runtime_error("GetKernelEntry: col/row out of range");
+      if (abs(j_col) > (m_kernelSize-1)/2)
+        throw std::runtime_error("GetKernelEntry: j_col (=" + std::to_string(j_col) + ") out of range");
+      if (abs(j_row) > (m_kernelSize-1)/2)
+        throw std::runtime_error("GetKernelEntry: j_row (=" + std::to_string(j_row) + ") out of range");
       const auto& kernel = GetKernel(j_u, j_v, j_w);
-      return kernel[j_col * m_kernelSize + j_row];
+      return kernel[(j_col + (m_kernelSize-1)/2) * m_kernelSize + (j_row + (m_kernelSize-1)/2)];
     }
 
   private:
@@ -218,11 +284,11 @@ private:
 
     int _index (int j_u, int j_v, int j_w) const {
       if (j_u < 0 || j_u >= m_binCountU)
-        throw std::runtime_error("ChargeSharingKernel::SetKernel: j_u (" + std::to_string(j_u) + ") out of range");
+        throw std::runtime_error("ChargeSharingKernel::_index: j_u (= " + std::to_string(j_u) + ") out of range");
       if (j_v < 0 || j_v >= m_binCountV)
-        throw std::runtime_error("ChargeSharingKernel::SetKernel: j_v (" + std::to_string(j_v) + ") out of range");
+        throw std::runtime_error("ChargeSharingKernel::_index: j_v (= " + std::to_string(j_v) + ") out of range");
       if (j_w < 0 || j_w >= m_binCountW)
-        throw std::runtime_error("ChargeSharingKernel::SetKernel: j_w (" + std::to_string(j_w) + ") out of range");
+        throw std::runtime_error("ChargeSharingKernel::_index: j_w (= " + std::to_string(j_w) + ") out of range");
 
       return j_u + m_binCountU * (j_v + m_binCountV * j_w); 
     }
