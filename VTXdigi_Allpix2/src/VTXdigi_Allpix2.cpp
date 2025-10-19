@@ -14,7 +14,12 @@ DECLARE_COMPONENT(VTXdigi_Allpix2)
  *        b) edm4hep::Vector3d <- natively used by edm4hep (where simHit, digiHit are from)
  *      -> generally use dd4hep::rec::Vector3D, convert via Vector3dConvert() where edm4hep::Vector3d is needed
  * - Indices named i_ ... refer to pixels. Indices named j_ ... refer to in-pixel bins (for charge deposition)
- * - local sensor frame: (u,v,w)
+ * - Reference frames: 
+ *        - global detector frame, use (x,y,z)
+ *             - z along beamline
+ *        - local sensor frame: (u,v,w)
+ *             - u,v span sensor plane, (for ARCADIA in barrel: v along z)
+ *             - w normal to sensor plane
  */
 
 VTXdigi_Allpix2::VTXdigi_Allpix2(const std::string& name, ISvcLocator* svcLoc)
@@ -28,7 +33,7 @@ VTXdigi_Allpix2::VTXdigi_Allpix2(const std::string& name, ISvcLocator* svcLoc)
 
 StatusCode VTXdigi_Allpix2::initialize() {
   // i think this is executed after the Gaudi properties are loaded (different to the constructor, where they are not necessarily loaded yet). ~ Jona 2025-09
-  debug() << "Initializing..." << endmsg;
+  info() << "INITIALIZING ..." << endmsg;
 
   m_uidSvc = service<IUniqueIDGenSvc>("UniqueIDGenSvc", true);
   if (!m_uidSvc) {
@@ -37,7 +42,7 @@ StatusCode VTXdigi_Allpix2::initialize() {
 
   m_geometryService = serviceLocator()->service(m_geometryServiceName);
   if (!m_geometryService) {
-    error() << " - Unable to retrieve the GeoSvc. Abort." << endmsg;
+    error() << "Unable to retrieve the GeoSvc. Abort." << endmsg;
     return StatusCode::FAILURE;
   }
 
@@ -47,12 +52,28 @@ StatusCode VTXdigi_Allpix2::initialize() {
   // retrieve the cellID encoding string from GeoSvc
   std::string cellIDstr = m_geometryService->constantAsString(m_encodingStringVariable.value());
   m_cellIDdecoder = std::make_unique<dd4hep::DDSegmentation::BitFieldCoder>(cellIDstr);
+  if (!m_cellIDdecoder) {
+    error() << "Unable to retrieve the cellID decoder. Abort." << endmsg;
+    return StatusCode::FAILURE;
+  }
 
-  // get surface map
+  // get simSurface map
   const auto detector = m_geometryService->getDetector();
-  const auto surfaceManager = detector->extension<dd4hep::rec::SurfaceManager>();
+  if (!detector) {
+    error() << " - Unable to retrieve the DD4hep detector from GeoSvc. Abort." << endmsg;
+    return StatusCode::FAILURE;
+  }
+  const auto simSurfaceManager = detector->extension<dd4hep::rec::SurfaceManager>();
+  if (!simSurfaceManager) {
+    error() << " - Unable to retrieve the SurfaceManager from the DD4hep detector. Abort." << endmsg;
+    return StatusCode::FAILURE;
+  }
   // dd4hep::DetElement subDetector = detector->detector(m_subDetName.value()); // not used? ~ Jona 2025-09
-  m_surfaceMap = surfaceManager->map(m_subDetName.value());
+  m_simSurfaceMap = simSurfaceManager->map(m_subDetName.value());
+  if (!m_simSurfaceMap) {
+    error() << " - Unable to retrieve the simSurface map for subdetector " << m_subDetName.value() << ". Abort." << endmsg;
+    return StatusCode::FAILURE;
+  }
 
   /* pixel pitch and count are given as either
   *  - a single value, which is then applied to all layers
@@ -73,7 +94,11 @@ StatusCode VTXdigi_Allpix2::initialize() {
   m_layerToIndex.clear();
   for (size_t layerIndex = 0; layerIndex < m_layersToDigitize.size(); layerIndex++) {
     int layer = m_layersToDigitize.value().at(layerIndex);
-    m_layerToIndex[layer] = static_cast<int>(layerIndex);
+    m_layerToIndex.insert({layer, static_cast<int>(layerIndex)});
+  }
+  verbose() << " - Digitizing the following layers: " << endmsg;
+  for (const auto& [layer, index] : m_layerToIndex) {
+    verbose() << "   - Layer " << layer << " (index " << index << ")" << endmsg;
   }
 
   if (m_pixelPitch_u.value().size() == 1 && m_pixelPitch_v.value().size() == 1 && m_pixelCount_u.value().size() == 1 && m_pixelCount_v.value().size() == 1 && m_sensorThickness.value().size() == 1) {
@@ -83,21 +108,25 @@ StatusCode VTXdigi_Allpix2::initialize() {
     m_pixelCount_u.value().resize(m_layerCount, m_pixelCount_u.value().at(0));
     m_pixelCount_v.value().resize(m_layerCount, m_pixelCount_v.value().at(0));
     m_sensorThickness.value().resize(m_layerCount, m_sensorThickness.value().at(0));
-    debug() << " - found single pixel pitch and pixel count values, applying them to all layers" << endmsg;
+    verbose() << " - found single values for pixel pitch and pixel count, applying them to all layers" << endmsg;
   }
   else if (m_pixelPitch_u.value().size() == m_layerCount && m_pixelPitch_v.value().size() == m_layerCount && m_pixelCount_u.value().size() == m_layerCount && m_pixelCount_v.value().size() == m_layerCount && m_sensorThickness.value().size() == m_layerCount) {
       // one entry per layer
-      debug() << " - found pixel pitch and pixel count values for all " << m_layerCount << " layers" << endmsg;
+      verbose() << " - found pixel pitch and pixel count values for all " << m_layerCount << " layers" << endmsg;
     }
   else {
     error() << "Pixel pitch and count, and sensor thickness must be given either as a single value for all layers (in brackets though: []) or as a vector with one entry per layer. Abort." << endmsg;
     return StatusCode::FAILURE;
   }
 
+  verbose() << " - Using the following sensor parameters for each layer:" << endmsg;
+  for (const auto& [layer, index] : m_layerToIndex) {
+    verbose() << "   - Layer " << layer << " (index " << index << "): pitch_u = " << m_pixelPitch_u.value().at(index) << " mm, pitch_v = " << m_pixelPitch_v.value().at(index) << " mm, count_u = " << m_pixelCount_u.value().at(index) << ", count_v = " << m_pixelCount_v.value().at(index) << ", thickness = " << m_sensorThickness.value().at(index) << " mm" << endmsg;
+  }
 
   // -- import charge sharing kernels --
 
-  debug() << " - Importing charge sharing kernels..." << endmsg;
+  verbose() << " - Importing charge sharing kernels..." << endmsg;
   m_chargeSharingKernels = std::make_unique<ChargeSharingKernels>(m_inPixelBinCount_u.value(), m_inPixelBinCount_v.value(), m_inPixelBinCount_w.value(), m_kernelSize.value());
 
   // TODO: read the kernels from file. Instead, set gaussian kernels for now
@@ -108,7 +137,7 @@ StatusCode VTXdigi_Allpix2::initialize() {
       error() << "Global kernel size does not match KernelSize property. Abort." << endmsg;
       return StatusCode::FAILURE;
     }
-    debug() << "   - Using a single global kernel for all layers" << endmsg;
+    verbose() << "   - Using a single global kernel for all layers" << endmsg;
     for (int i_u=0; i_u<m_inPixelBinCount_u.value(); i_u++) {
       for (int i_v=0; i_v<m_inPixelBinCount_v.value(); i_v++) {
         for (int i_w=0; i_w<m_inPixelBinCount_w.value(); i_w++) {
@@ -125,8 +154,10 @@ StatusCode VTXdigi_Allpix2::initialize() {
   m_histograms.at(hist_clusterSize).reset(
     new Gaudi::Accumulators::StaticRootHistogram<1>{this, "ClusterSize", "Cluster Size (ie. number of digiHits per accepted simHit)", {20, -0.5, 19.5}});
 
-  m_histograms.at(hist_trackLength).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "TrackLength", "Track Length in Sensor Active Volume;um", {1000, 0., 5000.}});
+  m_histograms.at(hist_pathLength).reset(
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "PathLength", "Path Length in Sensor Active Volume;um", {500, 0., m_sensorThickness.value().at(0)*10*1000}}); // in um, max 10x sensor thickness (for very shallow angles)
+  m_histograms.at(hist_pathLengthGeant4).reset(
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "PathLength-Geant4", "Path Length in Sensor Active Volume\nAs Given by Geant4;um", {500, 0., m_sensorThickness.value().at(0)*10*1000}}); // in um, max 10x sensor thickness (for very shallow angles)
 
   m_histograms.at(hist_EntryPointX).reset(
     new Gaudi::Accumulators::StaticRootHistogram<1>{this, "EntryPointX", "SimHit Entry Point U (in local sensor frame);mm", {400, -4, 4}});
@@ -136,9 +167,9 @@ StatusCode VTXdigi_Allpix2::initialize() {
     new Gaudi::Accumulators::StaticRootHistogram<1>{this, "EntryPointZ", "SimHit Entry Point W (in local sensor frame);um", {1000, -300, 300}});
 
   m_histograms.at(hist_DisplacementU).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "LocalDisplacementU", "Displacement U (local sensor frame): digiHit_u - simHit_u;um", {200, -200, 200}});
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "LocalDisplacementU", "Displacement U (local sensor frame): digiHit_u - simHit_u;um", {800, -200, 200}});
   m_histograms.at(hist_DisplacementV).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "LocalDisplacementV", "Displacement V (local sensor frame): digiHit_v - simHit_v;um", {200, -200, 200}});
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "LocalDisplacementV", "Displacement V (local sensor frame): digiHit_v - simHit_v;um", {800, -200, 200}});
   m_histograms.at(hist_DisplacementR).reset(
     new Gaudi::Accumulators::StaticRootHistogram<1>{this, "GlobalDisplacementR", "Displacement R (global frame): | digiHit - simHit |;um", {300, 0., 300}});
 
@@ -150,41 +181,64 @@ StatusCode VTXdigi_Allpix2::initialize() {
   m_histograms2d.resize(m_layersToDigitize.size()); // resize vector to hold all histograms
 
   for (int layer : m_layersToDigitize) {
-    int layerIndex = m_layerToIndex[layer];
+    int layerIndex = m_layerToIndex.at(layer);
+    verbose () << " - Creating 2D histograms for layer " << layer << " (index " << layerIndex << ")" << endmsg;
     m_histograms2d.at(layerIndex).at(hist2d_hitMap_simHits).reset(
       new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
         "Layer"+std::to_string(layer)+"_HitMap_simHits",
         "SimHit Hitmap, Layer " + std::to_string(layer) + " (Local);u [pix]; v [pix]",
-        {static_cast<unsigned int>(m_pixelCount_u[0]), -0.5, static_cast<double>(m_pixelCount_u[0]+0.5)},
-        {static_cast<unsigned int>(m_pixelCount_v[0]), -0.5, static_cast<double>(m_pixelCount_v[0]+0.5)}
+        {static_cast<unsigned int>(m_pixelCount_u.value().at(0)), -0.5, static_cast<double>(m_pixelCount_u.value().at(0)+0.5)},
+        {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)}
       }
     );
     m_histograms2d.at(layerIndex).at(hist2d_hitMap_digiHits).reset(
       new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
         "Layer"+std::to_string(layer)+"_HitMap_digiHits",
         "DigiHit Hitmap, Layer " + std::to_string(layer) + " (Local);u [pix]; v [pix]",
-        {static_cast<unsigned int>(m_pixelCount_u[0]), -0.5, static_cast<double>(m_pixelCount_u[0]+0.5)},
-        {static_cast<unsigned int>(m_pixelCount_v[0]), -0.5, static_cast<double>(m_pixelCount_v[0]+0.5)}
+        {static_cast<unsigned int>(m_pixelCount_u.value().at(0)), -0.5, static_cast<double>(m_pixelCount_u.value().at(0)+0.5)},
+        {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)}
       }
     );
     m_histograms2d.at(layerIndex).at(hist2d_hitMap_simHitDebug).reset(
       new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
         "Layer"+std::to_string(layer)+"_HitMap_simHitsDebug",
         "SimHit Debugging Hitmap, Layer " + std::to_string(layer) + " (Local) \n showing hits where local w != -25 um;u [pix]; v [pix]",
-        {static_cast<unsigned int>(m_pixelCount_u[0]), -0.5, static_cast<double>(m_pixelCount_u[0]+0.5)},
-        {static_cast<unsigned int>(m_pixelCount_v[0]), -0.5, static_cast<double>(m_pixelCount_v[0]+0.5)}
+        {static_cast<unsigned int>(m_pixelCount_u.value().at(0)), -0.5, static_cast<double>(m_pixelCount_u.value().at(0)+0.5)},
+        {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)}
       }
     );
     m_histograms2d.at(layerIndex).at(hist2d_hitMap_digiHitDebug).reset(
       new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
         "Layer"+std::to_string(layer)+"_HitMap_digiHitsDebug",
         "DigiHit Debugging Hitmap, Layer " + std::to_string(layer) + " (Local)\n showing hits where local w != -25 um;u [pix]; v [pix]",
-        {static_cast<unsigned int>(m_pixelCount_u[0]), -0.5, static_cast<double>(m_pixelCount_u[0]+0.5)},
-        {static_cast<unsigned int>(m_pixelCount_v[0]), -0.5, static_cast<double>(m_pixelCount_v[0]+0.5)}
+        {static_cast<unsigned int>(m_pixelCount_u.value().at(0)), -0.5, static_cast<double>(m_pixelCount_u.value().at(0)+0.5)},
+        {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)}
+      }
+    );
+    m_histograms2d.at(layerIndex).at(hist2d_pathLength_vs_simHit_v).reset(
+      new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
+        "Layer"+std::to_string(layer)+"_TrackLength_vs_simHit_v",
+        "Track Length in Sensor Active Volume vs. SimHit v position (local), Layer " + std::to_string(layer) + ";Track Length [um]; simHit v [pix]",
+        {200, 0., 10*m_sensorThickness.value().at(layerIndex)*1000}, // in um
+        {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)}
       }
     );
   }
 
+  // -- Debugging CSV output --
+  if (!m_debugCsvName.value().empty()) {
+    
+    verbose() << " - Debug CSV output enabled, opening file." << endmsg;
+    m_debugCsvFile.open(m_debugCsvName.value());
+
+    if (!m_debugCsvFile.is_open()) {
+      throw GaudiException("Failed to open debug CSV file", "VTXdigi_Allpix2::initialize", StatusCode::FAILURE);
+    } else {
+      m_debugCsvFile << "eventNumber,layerIndex,segmentCount,sensorThickness,pix_u,pix_v,simHitPos_u,simHitPos_v,simHitPos_w,simHitEntryPos_u,simHitEntryPos_v,simHitEntryPos_w,simHitPath_u,simHitPath_v,simHitPath_w,pathLengthGeant4,pathLength,energyDeposition,debugFlag\n";
+      m_debugCsvFile.flush();
+      info() << "   - writing to file: " << m_debugCsvName.value() << endmsg;
+    }
+  } else { verbose() << " - Debug CSV output disabled" << endmsg; }
 
   // TODO: check that pixel pitch and count match sensor size in geometry (I am not sure how to get the sensor size from the geometry though, does seem to be a bit more general, subDetectors have children that might or might not be layers) ~ Jona 2025-09
   // TODO load lookup table for charge transport and diffusion
@@ -194,182 +248,201 @@ StatusCode VTXdigi_Allpix2::initialize() {
 }
 
 StatusCode VTXdigi_Allpix2::finalize() {
-  info() << "Finalizing..." << endmsg;
+  info() << "FINALIZING ..." << endmsg;
+
+  // if (m_debugCsvFile.is_open()) {
+  //   m_debugCsvFile.close();
+  //   verbose() << " - Closed debug CSV file" << endmsg;
+  // }
 
   info() << " - processed " << m_counters.at(counter_eventsRead) << " events" << endmsg;
   info() << "   - rejected " << m_counters.at(counter_eventsRejected_noSimHits) << " events for having no simHits" << endmsg;
   info() << "   - accepted " << m_counters.at(counter_eventsAccepted) << " events" << endmsg;
   if (m_counters.at(counter_eventsRead) != m_counters.at(counter_eventsRejected_noSimHits) + m_counters.at(counter_eventsAccepted))
-    warning() << "   - number of accepted and rejected events does not add up to total number of processed events!" << endmsg;
+    warning() << "Number of accepted and rejected events does not add up to total number of processed events!" << endmsg;
   info() << " - processed " << m_counters.at(counter_simHitsRead) << " simHits" << endmsg;
   info() << "   - rejected " << m_counters.at(counter_simHitsRejected_LayerNotToBeDigitized) << " simHits for being in a layer not to be digitized" << endmsg;
   info() << "   - rejected " << m_counters.at(counter_simHitsRejected_EnergyCut) << " simHits for having an energy deposition below the cut" << endmsg;
-  info() << "   - rejected " << m_counters.at(counter_simHitsRejected_SurfaceDistToLarge) << " simHits for having a non-zero distance to the sensor surface (from dd4hep::rec::ISurface::distance())" << endmsg;
-  info() << "   - rejected " << m_counters.at(counter_simHitsRejected_OutsideSensor) << " simHits for having a position outside the sensor surface (from vertical component of pos. in local sensor frame)" << endmsg;
+  info() << "   - rejected " << m_counters.at(counter_simHitsRejected_SurfaceDistToLarge) << " simHits for having a non-zero distance to the sensor simSurface (from dd4hep::rec::ISurface::distance())" << endmsg;
+  info() << "   - rejected " << m_counters.at(counter_simHitsRejected_OutsideSensor) << " simHits for having a position outside the sensor (from vertical component of pos. in local sensor frame)" << endmsg;
+  info() << "   - rejected " << m_counters.at(counter_simHitsRejected_NoSegmentsInSensor) << " simHits for having no segments inside the sensor." << endmsg;
   info() << "   - accepted " << m_counters.at(counter_simHitsAccepted) << " simHits" << endmsg;
-  if (m_counters.at(counter_simHitsRead) != m_counters.at(counter_simHitsRejected_LayerNotToBeDigitized) + m_counters.at(counter_simHitsRejected_EnergyCut) + m_counters.at(counter_simHitsRejected_SurfaceDistToLarge) + m_counters.at(counter_simHitsRejected_OutsideSensor) + m_counters.at(counter_simHitsAccepted))
-    warning() << "   - number of accepted and rejected simHits does not add up to total number of processed simHits!" << endmsg;
+  if (m_counters.at(counter_simHitsRead) != m_counters.at(counter_simHitsRejected_LayerNotToBeDigitized) + m_counters.at(counter_simHitsRejected_EnergyCut) + m_counters.at(counter_simHitsRejected_SurfaceDistToLarge) + m_counters.at(counter_simHitsRejected_OutsideSensor) + m_counters.at(counter_simHitsRejected_NoSegmentsInSensor) + m_counters.at(counter_simHitsAccepted))
+    warning() << "Number of accepted and rejected simHits does not add up to total number of processed simHits!" << endmsg;
   info() << " - created " << m_counters.at(counter_digiHitsCreated) << " digiHits" << endmsg;
   info() << "   - average number of digiHits per accepted simHit (ie. cluster size): " << (m_counters.at(counter_simHitsAccepted) > 0 ? float(m_counters.at(counter_digiHitsCreated)) / float(m_counters.at(counter_simHitsAccepted)) : 0) << endmsg;
 
-  debug() << " - finalized successfully" << endmsg;
+  verbose() << " - finalized successfully" << endmsg;
   return StatusCode::SUCCESS;
 } 
+
 
 // -- event loop -- 
 
 std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> VTXdigi_Allpix2::operator()
   (const edm4hep::SimTrackerHitCollection& simHits, const edm4hep::EventHeaderCollection& headers) const {
+  m_eventNumber = headers.at(0).getEventNumber();
 
-  debug() << "PROCESSING event. run " << headers.at(0).getRunNumber() << "; event " << headers.at(0).getEventNumber() << "; with " << simHits.size() << " simHits" << endmsg;
+  info() << "PROCESSING event. run " << headers.at(0).getRunNumber() << "; event " << m_eventNumber << "; with " << simHits.size() << " simHits" << endmsg;
   m_counters.at(counter_eventsRead)++;
 
+  // early sanity checks to avoid segfaults from null pointers
+  if (!m_chargeSharingKernels) throw GaudiException("ChargeSharingKernels is null in operator(). Did initialize() succeed?", "VTXdigi_Allpix2::operator()", StatusCode::FAILURE);
+
   if (simHits.size()==0) {
-    info() << " - No SimTrackerHits in collection, returning empty output collections" << endmsg;
+    debug() << " - No SimTrackerHits in collection, returning empty output collections" << endmsg;
     m_counters.at(counter_eventsRejected_noSimHits)++;
     return std::make_tuple(edm4hep::TrackerHitPlaneCollection(), edm4hep::TrackerHitSimTrackerHitLinkCollection());
   }
   m_counters.at(counter_eventsAccepted)++;
 
   // create output collections
-  
   auto digiHits = edm4hep::TrackerHitPlaneCollection();
   auto digiHitsLinks = edm4hep::TrackerHitSimTrackerHitLinkCollection();
-  unsigned int nHitsRead=0, nHitsCreated=0, nHitsRejected=0;
+  unsigned int nHitsRead=0, nHitsCreated=0, nHitsRejected=0; // per-event counters
 
   // loop over sim hits, digitize them, create output collections
   for (const auto& simHit : simHits) {
     nHitsRead++;
     m_counters.at(counter_simHitsRead)++;
+    m_debugFlag = false;
 
-    // -- gather information about the simHit --    
+    // gather information about the simHit 
     dd4hep::DDSegmentation::CellID cellID = simHit.getCellID(); // TODO: apply 64-bit length mask as done in DDPlanarDigi.cpp? ~ Jona 2025-09
-    dd4hep::rec::Vector3D simHitGlobalPos = Vector3dConvert(simHit.getPosition());
-    dd4hep::rec::Vector3D simHitLocalPos = GlobalToLocal(simHitGlobalPos, cellID);
-    int layer = m_cellIDdecoder->get(cellID, "layer");
-    double eDeposition = simHit.getEDep() * (dd4hep::GeV / dd4hep::keV); // convert to keV
-    
-    const dd4hep::rec::ISurface* surface = m_surfaceMap->find(cellID)->second;
+    const dd4hep::rec::Vector3D simHitGlobalPos = Vector3dConvert(simHit.getPosition());
+    const dd4hep::rec::Vector3D simHitLocalPos = GlobalToLocal(simHitGlobalPos, cellID);
 
-    debug() << " - FOUND simHit in cellID " << simHit.getCellID() << ", Edep = " << eDeposition << " keV, path length = " << simHit.getPathLength()*1000 << " um" << endmsg;
-    debug() << "   at global position " << simHit.getPosition().x << " mm, " << simHit.getPosition().y << " mm, " << simHit.getPosition().z << " mm" << endmsg;
-    debug() << "   at local position " << simHitLocalPos[0] << " mm, " << simHitLocalPos[1] << " mm, " << simHitLocalPos[2] << " mm (in sensor frame)" << endmsg;
-    debug() << "   with distance " << surface->distance(dd4hep::mm * simHitGlobalPos) << " mm to surface" << endmsg; // dd4hep expects cm, simHitGlobalPosition is in mm. dd4hep::cm=0.1
-    
-    if (abs(surface->distance(dd4hep::mm * simHitGlobalPos)) > 1E-10) {
-      warning() << "   - simHit is not on the sensor surface (distance = " << surface->distance(dd4hep::mm * simHitGlobalPos) * 1000 << " um). Dismissing." << endmsg; // convert to um
-      nHitsRejected++;
-      m_counters.at(counter_simHitsRejected_SurfaceDistToLarge)++;
-      continue;
+    // DISMISS if layer is not in the list of layers to digitize. Cant be done with other cuts later, would lead to out-of-bounds access in m_pixelCount_u etc
+    if (m_layersToDigitize.value().size()>0) {
+      const int layer = m_cellIDdecoder->get(cellID, "layer");
+      if (std::find(m_layersToDigitize.value().begin(), m_layersToDigitize.value().end(), layer) == m_layersToDigitize.value().end()) {
+        verbose() << "   - DISMISSED SimHit in layer " << layer << ". (not in the list of layers to digitize)" << endmsg;
+        m_counters.at(counter_simHitsRejected_LayerNotToBeDigitized)++;
+        nHitsRejected++;
+        continue;
+      }
     }
 
-    // -- apply cuts --
-    if (!ApplySimHitCuts(layer, eDeposition)) {
-      
-      nHitsRejected++;
-      // m_counters are incremented inside ApplySimHitCuts()
-      continue;
+    debug() << "  - FOUND SimHit in layer " << m_cellIDdecoder->get(cellID, "layer") << endmsg;
+    int layerIndex = m_layerToIndex.at(m_cellIDdecoder->get(cellID, "layer")); // will throw if layer not in map, but this is already checked above. Use this instead of layer to avoid segfaults if layers are not numbered consecutively
+
+    float eDeposition = simHit.getEDep() * (dd4hep::GeV / dd4hep::keV); // convert to keV
+    float chargeDeposition = eDeposition * m_chargePerEnergy.value(); // in electrons
+    
+    if (!m_simSurfaceMap) throw GaudiException("SimSurface map is null in operator(). Did initialize() succeed?", "VTXdigi_Allpix2::operator()", StatusCode::FAILURE);
+    const auto itSimSurface = m_simSurfaceMap->find(cellID);
+    if (itSimSurface == m_simSurfaceMap->end()) throw GaudiException("No simSurface found for cellID " + std::to_string(cellID) + " in operator(). Did initialize() succeed?", "VTXdigi_Allpix2::operator()", StatusCode::FAILURE);
+    const dd4hep::rec::ISurface* simSurface = itSimSurface->second;
+    if (!simSurface) throw GaudiException("SimSurface pointer for cellID " + std::to_string(cellID) + " is null in operator(). Did initialize() succeed?", "VTXdigi_Allpix2::operator()", StatusCode::FAILURE);
+
+    // get sensor size in local frame
+    const float length_u = simSurface->length_along_u() * 10; // convert to mm
+    const float length_v = simSurface->length_along_v() * 10; // convert to mm
+
+    const auto& [simHitEntryPos, simHitPath] = GetSimHitPath(simHit, layerIndex, length_u, length_v); // both are of type dd4hep::rec::Vector3D, given in mm
+    
+    { // debug statements
+      debug() << "   - Edep = " << eDeposition << " keV, path length = " << simHitPath.r() << " mm, Geant4 path length = " << simHit.getPathLength() << " mm" << endmsg;
+      verbose() << "   - Position (global) " << simHit.getPosition().x << " mm, " << simHit.getPosition().y << " mm, " << simHit.getPosition().z << " mm" << endmsg;
+      debug() << "   - Position (local) " << simHitLocalPos.x() << " mm, " << simHitLocalPos.y() << " mm, " << simHitLocalPos.z() << " mm (in sensor frame)" << endmsg;
+      verbose() << "   - Distance to surface " << simSurface->distance(dd4hep::mm * simHitGlobalPos) << " mm" << endmsg; // dd4hep expects cm, simHitGlobalPosition is in mm. dd4hep::cm=0.1
+      verbose() << "   - Entry point (sensor local) : " << simHitEntryPos.x() << " mm, " << simHitEntryPos.y() << " mm, " << simHitEntryPos.z() << " mm" << endmsg;
     }
-
-    // initial sensor size check
-    // do NOT do this before cuts, as otherwise we might check layers that are not used
-    if (m_initialSensorSizeCheckPassed.find(layer) == m_initialSensorSizeCheckPassed.end())
-      InitialSensorSizeCheck(simHit);
-
-
-    // -- get simHit path, segment into ionization points. (approximates paths as straight line) --
     
-    // 1) split the path into equally long segments
-    float simHitPathLength = simHit.getPathLength(); // in mm
-    int segmentNumber = int( simHitPathLength / m_targetPathSegmentLength ); // both in mm
-    segmentNumber = std::max(1, segmentNumber); // want at least one segment
-    float segmentLength = simHitPathLength / segmentNumber;
-    float segmentEdep = eDeposition / segmentNumber;
-    debug() << "   - Segmenting path of length " << simHitPathLength*1000 << " um into " << segmentNumber << " segments of length " << segmentLength*1000 << " um" << endmsg;
-    
-    // 2) get path direction (unit vector), entry point (local frame)
-    auto [simHitPath, simHitEntryPoint] = GetSimHitPath(simHit); // both are of type dd4hep::rec::Vector3D, given in mm
-    debug() << "   - Entry point (sensor local) : " << simHitEntryPoint[0] << " mm, " << simHitEntryPoint[1] << " mm, " << simHitEntryPoint[2] << " mm" << endmsg;
-
-    if (abs(simHitEntryPoint[2]) > m_sensorThickness[layer] / 2 + 1E-4) { // entry point is outside sensor thickness (add small tolerance for numerical inaccuracies)
-      warning() << "   - WARNING: simHit entry point is outside sensor thickness (local w = " << simHitEntryPoint[2]*1000 << " um, sensor thickness = " << m_sensorThickness[layer]*1000 << " um). Dismissing." << endmsg;
-      nHitsRejected++;
-      m_counters.at(counter_simHitsRejected_OutsideSensor)++;
+    // apply cuts
+    if (!ApplySimHitCuts(*simSurface, layerIndex, eDeposition, simHitEntryPos, simHitPath, simHitGlobalPos)) {
+      nHitsRejected++; // m_counters are incremented inside ApplySimHitCuts()
       continue;
     }
     
-    // get pixel edges in local frame
-    /* u - short ARCADIA axis, corresponds to x in sensor local frame
-    * v - long ARCADIA axis, corresponds to y in sensor local frame
-    * w - orthogonal to sensor plane, corresponds to z in sensor local frame
-    */
-    const double length_u = surface->length_along_u() * 10; // convert to mm
-    const double length_v = surface->length_along_v() * 10; // convert to mm
-    const int size_u = m_pixelCount_u[layer];
-    const int size_v = m_pixelCount_v[layer];
-
-    debug() << "   - ACCEPTED SimHit in layer " << layer << ". Edep =" << eDeposition << " keV. Starting loop over segments" << endmsg;
+    // initial sensor size check (do NOT do this before cuts, as otherwise we might check layers that are not used)
+    if (m_initialSensorSizeCheckPassed.find(layerIndex) == m_initialSensorSizeCheckPassed.end())
+    InitialSensorSizeCheck(simHit);
+    
+    // get more info about the simHit path segmentation
+    float simHitPathLength_Geant4 = simHit.getPathLength(); // in mm
+    int segmentN = int( simHitPathLength_Geant4 / m_targetPathSegmentLength ); // both in mm
+    segmentN = std::max(1, segmentN); // want at least one segment
+    float segmentLength = simHitPathLength_Geant4 / segmentN;
+    float segmentEdep = eDeposition / segmentN;
+    debug() << "   - ACCEPTED SimHit in layer " << m_cellIDdecoder->get(cellID, "layer") << ". Edep =" << eDeposition << " keV. Starting loop over segments" << endmsg;
     m_counters.at(counter_simHitsAccepted)++;
-
-    // -- loop over the segments, assign charges to pixels according to kernel--
-
-    std::vector<double> pixelCharge(size_u * size_v, 0.0); // array to store the charge assigned to each pixel, reset for each simHit. Index = i_u + i_v*size_u (Use 1-d vector to avoid overhead)
-    int i_u, i_v; // pixel indices
-    int i_u_previous, i_v_previous; // indices of previous segment
-    int j_u, j_v, j_w; // in-pixel indices (for charge sharing kernel)
-    int j_u_previous, j_v_previous, j_w_previous; 
     
-    // first segment (i=0) is treated outside the loop, to initialize j_u_previous
-    std::tie(i_u_previous, i_v_previous, j_u_previous, j_v_previous, j_w_previous) = ProcessSegment(simHitEntryPoint, simHitPath, 0, segmentNumber, layer, length_u, length_v);
+    
+    // -- loop over the segments, assign charges to pixels according to kernel--
+    verbose() << "   - Segmenting path of length " << simHitPathLength_Geant4 << " mm into " << segmentN << " segments of length " << segmentLength << " mm" << endmsg;
+    
+    const int size_u = m_pixelCount_u.value().at(layerIndex);
+    const int size_v = m_pixelCount_v.value().at(layerIndex);
 
+    std::vector<float> pixelCharge(size_u * size_v, 0.0); // array to store the charge assigned to each pixel, reset for each simHit. Index = i_u + i_v*size_u (Use 1-d vector to avoid overhead)
+
+    int i_u, i_v; // segment being processed: pixel indices
+    int j_u, j_v, j_w; // in-pixel indices
+    int i_u_next, i_v_next; // next segment
+    int j_u_next, j_v_next, j_w_next;
+
+    // first segment (segment=0) is treated outside the loop, to initialize j_u_previous
+    verbose() << " Pre-loading first segment" << endmsg;
+    std::tie(i_u, i_v, j_u, j_v, j_w) = ProcessSegment(simHitEntryPos, simHitPath, 0, segmentN, layerIndex, length_u, length_v);
     int nSegmentsInBin = 1; // number of segments in the same in-pixel bin (used to apply kernel only once per bin, not per segment)
 
-    for (int i=1; i<segmentNumber; i++) {
-      
-      // get segment pixel & in-pixel position (in terms of indices)
-      std::tie(i_u, i_v, j_u, j_v, j_w) = ProcessSegment(simHitEntryPoint, simHitPath, i, segmentNumber, layer, length_u, length_v);
+    for (int segment=1; segment<segmentN; segment++) {
 
-      if ((i_u == i_u_previous && i_v == i_v_previous && j_u == j_u_previous && j_v == j_v_previous && j_w == j_w_previous) && i != segmentNumber-1) {
+      std::tie(i_u_next, i_v_next, j_u_next, j_v_next, j_w_next) = ProcessSegment(simHitEntryPos, simHitPath, segment, segmentN, layerIndex, length_u, length_v);
+
+      if ((i_u_next == i_u && i_v_next == i_v && j_u_next == j_u && j_v_next == j_v && j_w_next == j_w) && segment < segmentN-1) {
         nSegmentsInBin++;
-        verbose() << "       - Segment is in the same pixel and in-pixel bin as previous segment, increasing counter to " << nSegmentsInBin << endmsg;
+        verbose() << "       - Segment lies in the same pixel and in-pixel bin as previous segment, increasing counter to " << nSegmentsInBin << endmsg;
         continue; // still in the same pixel and in-pixel bin
       } // if sement in same bin
       else {
-        verbose() << "       - Crossed bin-boundary or reached last segment. Sharing charge from last bin." << endmsg;
+        verbose() << "       - Crossed bin-boundary or reached last segment. Sharing " << segmentEdep*nSegmentsInBin << " from previous bin." << endmsg;
 
-        if (i_u_previous == -1 && i_v_previous == -1 && j_u_previous == -1 && j_v_previous == -1 && j_w_previous == -1) {
-          warning() << "       - Segments lie outside sensor area. Dismissing." << endmsg;
+        if (i_u == -1 && i_v == -1 && j_u == -1 && j_v == -1 && j_w == -1) {
+          warning() << "Applying Kernel: Segments lie outside sensor area. Dismissing." << endmsg;
           continue; // segment is outside sensor area
         }
         // new pixel or in-pixel bin, apply kernel for previous bin
 
-        // pixelCharge.at(i_u_previous + i_v_previous*size_u) += nSegmentsInBin * segmentEdep;
-
-        /* each kernel entry shares charge from the source-pixel to one target-pixel.
+        /* each kernel entry shares charge from the source-pixel i_u, i_v to one target-pixel.
          * The kernel is centered on the source pixel, so loop over all target pixels covered by the kernel.
          * i_x_previous defines the source-pixel */
+
         int i_u_target, i_v_target;
+
         for (int i_m = -1*(m_kernelSize.value()-1)/2; i_m<=(m_kernelSize.value()-1)/2; i_m++) {
-          i_u_target = i_u_previous + i_m;
-          if (i_u_target<0 || i_u_target>=size_u) continue; // target pixel is outside sensor area
+          i_u_target = i_u + i_m;
+          if (i_u_target<0 || i_u_target>=size_u) continue; 
 
           for (int i_n = -1*(m_kernelSize.value()-1)/2; i_n<=(m_kernelSize.value()-1)/2; i_n++) {
-            i_v_target = i_v_previous + i_n;
+            i_v_target = i_v + i_n;
             if (i_v_target<0 || i_v_target>=size_v) continue;
 
-            pixelCharge.at(i_u_target + i_v_target*size_u) += m_chargeSharingKernels->GetKernelEntry(j_u_previous, j_v_previous, j_w_previous, i_m, i_n) * nSegmentsInBin * segmentEdep;
+            if (j_u == -1 || j_v == -1 || j_w == -1) {
+              warning() << "Applying Kernel: Segment lies outside sensor area. Dismissing." << endmsg;
+              continue; 
+            }
 
-            verbose() << "         - Sharing " << m_chargeSharingKernels->GetKernelEntry(j_u_previous, j_v_previous, j_w_previous, i_m, i_n) * nSegmentsInBin * segmentEdep << " keV to pixel (" << i_u_target << ", " << i_v_target << ")" << endmsg;
+            try {
+              const float kernelEntry = m_chargeSharingKernels->GetWeight(j_u, j_v, j_w, i_m, i_n);
+              pixelCharge.at(i_u_target + i_v_target*size_u) += kernelEntry * nSegmentsInBin * segmentEdep; 
+            } catch (const std::exception& e) {
+              warning() << "Exception while accessing kernel entry for in-pixel bin (" << j_u << "," << j_v << "," << j_w << "): " << e.what() << ". Skipping this kernel entry." << endmsg;
+              continue;
+            }
+
+            // verbose() << "         - Hit in pixel (" << i_u << ", " << i_v << ") sharing " << m_chargeSharingKernels->GetWeight(j_u, j_v, j_w, i_m, i_n) * nSegmentsInBin * segmentEdep << " keV to pixel (" << i_u_target << ", " << i_v_target << ")" << endmsg;
           }
         }
 
         // reset counters, indices for new bin
         nSegmentsInBin = 1;
-        i_u_previous = i_u;
-        i_v_previous = i_v;
-        j_u_previous = j_u;
-        j_v_previous = j_v;
-        j_w_previous = j_w;
+        i_u = i_u_next;
+        i_v = i_v_next;
+        j_u = j_u_next;
+        j_v = j_v_next;
+        j_w = j_w_next;
       } // if segment in different bin
     } // loop over segments
     
@@ -377,119 +450,145 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
     int nPixelsFired = 0;
     
     debug() << "   - Processed all segments. Creating digiHits." << endmsg;
-    for (i_u = 0; i_u<m_pixelCount_u.value().at(layer); i_u++) {
-      for (i_v = 0; i_v<m_pixelCount_v.value().at(layer); i_v++) {
-        if (pixelCharge.at(i_u + i_v*size_u)>0) {
+    for (i_u = 0; i_u<m_pixelCount_u.value().at(layerIndex); i_u++) {
+      for (i_v = 0; i_v<m_pixelCount_v.value().at(layerIndex); i_v++) {
+        if (pixelCharge.at(i_u + i_v*size_u) > m_numericLimit_float) {
           nPixelsFired++;
           
-          dd4hep::rec::Vector3D pixelCenter = GetPixelCenter_Local(i_u, i_v, layer, *surface);
-          pixelCenter = LocalToGlobal(pixelCenter, cellID); // convert to global frame
+          dd4hep::rec::Vector3D pixelCenterLocal = GetPixelCenter_Local(i_u, i_v, layerIndex, *simSurface);
+          dd4hep::rec::Vector3D pixelCenterGlobal = LocalToGlobal(pixelCenterLocal, cellID);
 
-          verbose() << "     - Pixel (" << i_u << ", " << i_v << ") received " << pixelCharge.at(i_u + i_v*size_u) << " keV, center at global position " << pixelCenter[0] << " mm, " << pixelCenter[1] << " mm, " << pixelCenter[2] << " mm" << endmsg;
-          CreateDigiHit(simHit, digiHits, digiHitsLinks, pixelCharge.at(i_u + i_v*size_u), pixelCenter);
+          debug() << "     - Pixel (" << i_u << ", " << i_v << ") at (" << pixelCenterLocal.x() << ", " << pixelCenterLocal.y() << ", " << pixelCenterLocal[2] << ") mm received " << pixelCharge.at(i_u + i_v*size_u) << " keV, center at global position " << pixelCenterGlobal[0] << " mm, " << pixelCenterGlobal[1] << " mm, " << pixelCenterGlobal[2] << " mm" << endmsg;
+          CreateDigiHit(simHit, digiHits, digiHitsLinks, pixelCharge.at(i_u + i_v*size_u), pixelCenterGlobal);
           nHitsCreated++;
           m_counters.at(counter_digiHitsCreated)++;
+          
 
-          ++ (*m_histograms[hist_DisplacementU])[1000 * (pixelCenter[0] - simHitGlobalPos[0])]; // in um
-          ++ (*m_histograms[hist_DisplacementV])[1000 * (pixelCenter[1] - simHitGlobalPos[1])]; // in um
-          ++ (*m_histograms[hist_DisplacementR])[1000 * sqrt( (pixelCenter[0] - simHitGlobalPos[0])*(pixelCenter[0] - simHitGlobalPos[0]) + (pixelCenter[1] - simHitGlobalPos[1])*(pixelCenter[1] - simHitGlobalPos[1]) + (pixelCenter[2] - simHitGlobalPos[2])*(pixelCenter[2] - simHitGlobalPos[2]) )]; // in um
+          ++ (*m_histograms.at(hist_DisplacementU))[ (pixelCenterLocal.x() - simHitLocalPos.x()) * 1000]; // convert mm to um
+          ++ (*m_histograms.at(hist_DisplacementV))[ (pixelCenterLocal.y() - simHitLocalPos.y()) * 1000]; // convert mm to um
+          ++ (*m_histograms.at(hist_DisplacementR))[sqrt( (pixelCenterGlobal.x() - simHitGlobalPos.x())*(pixelCenterGlobal.x() - simHitGlobalPos.x()) + (pixelCenterGlobal.y() - simHitGlobalPos.y())*(pixelCenterGlobal.y() - simHitGlobalPos.y()) + (pixelCenterGlobal.z() - simHitGlobalPos.z())*(pixelCenterGlobal.z() - simHitGlobalPos.z()) ) * 1000]; // convert mm to um
         }
       }
     } // loop over pixels, create digiHits
-    debug() << "   - From this simHit, " << nPixelsFired << " pixels received charge." << endmsg;
 
+    // if (nPixelsFired == 0) {
+    //   verbose() << "   - DISMISSED. No pixels fired for this simHit (no segments lie inside the sensor volume)" << endmsg;
+    //   m_counters.at(counter_simHitsRejected_NoSegmentsInSensor)++;
+    //   continue;
+    // }
+    // verbose() << "   - From this simHit, " << nPixelsFired << " pixels received charge." << endmsg;
 
     // -- fill debugging histograms --
 
     verbose() << "   - Filling 1D histograms" << endmsg;
-    ++(*m_histograms[hist_hitE])[eDeposition]; // in keV
-    ++(*m_histograms[hist_EntryPointX])[simHitEntryPoint[0]]; // in mm
-    ++(*m_histograms[hist_EntryPointY])[simHitEntryPoint[1]]; // in mm
-    ++(*m_histograms[hist_EntryPointZ])[simHitEntryPoint[2]*1000]; // in um
-    ++(*m_histograms[hist_clusterSize])[static_cast<double>(nPixelsFired)]; // cluster size = number of pixels fired per simHit
-    ++(*m_histograms[hist_trackLength])[simHitPathLength*1000]; // in um
-    ++(*m_histograms[hist_HitEnergyDifference])[ (nPixelsFired>0 ? (eDeposition - std::accumulate(pixelCharge.begin(), pixelCharge.end(), 0.0)) : 0.0) ]; // in keV, only if at least one pixel fired
+    ++(*m_histograms.at(hist_hitE))[eDeposition]; // in keV
+    ++(*m_histograms.at(hist_EntryPointX))[simHitEntryPos.x()]; // in mm
+    ++(*m_histograms.at(hist_EntryPointY))[simHitEntryPos.y()]; // in mm
+    ++(*m_histograms.at(hist_EntryPointZ))[simHitEntryPos.z()*1000]; // convert mm to um
+    ++(*m_histograms.at(hist_clusterSize))[static_cast<double>(nPixelsFired)]; // cluster size = number of pixels fired per simHit
+    ++(*m_histograms.at(hist_pathLength))[simHitPath.r()*1000]; // convert mm to um
+    ++(*m_histograms.at(hist_pathLengthGeant4))[simHitPathLength_Geant4*1000]; // convert mm to um
+    ++(*m_histograms.at(hist_HitEnergyDifference))[ (nPixelsFired>0 ? (eDeposition - std::accumulate(pixelCharge.begin(), pixelCharge.end(), 0.0)) : 0.0) ]; // in keV, only if at least one pixel fired
 
-    verbose() << "   - Filling 2D histograms" << endmsg;
     int pix_u, pix_v;
-    std::tie(pix_u, pix_v) = GetPixelIndices(simHitLocalPos, layer, length_u, length_v);
-    int layerIndex = m_layerToIndex.at(layer); // m_layerToIndex[layer] would create a new entry if layer is not found, at() throws an exception instead
-    ++(*m_histograms2d[layerIndex][hist2d_hitMap_simHits])[{pix_u, pix_v}]; // in mm
-    if (
-      (abs(simHitEntryPoint[2]) - m_sensorThickness[layer] / 2) > 1E-4) { // if simHit entry point is not on sensor surface
-      ++(*m_histograms2d[layerIndex][hist2d_hitMap_simHitDebug])[{pix_u, pix_v}];
+    std::tie(pix_u, pix_v) = GetPixelIndices(simHitLocalPos, layerIndex, length_u, length_v);
+    verbose() << "   - Filling 2D histograms for layer " << m_cellIDdecoder->get(cellID, "layer") << " (index " << layerIndex << ")" << endmsg;
+    ++(*m_histograms2d.at(layerIndex).at(hist2d_hitMap_simHits))[{pix_u, pix_v}]; // in mm
+    ++(*m_histograms2d.at(layerIndex).at(hist2d_pathLength_vs_simHit_v))[{simHitPath.r()*1000, pix_v}]; // in um and mm
+
+    if (m_debugFlag) { 
+      ++(*m_histograms2d.at(layerIndex).at(hist2d_hitMap_simHitDebug))[{pix_u, pix_v}];
+
+      int i_u_debug, i_v_debug;
+      std::tie(i_u_debug, i_v_debug) = GetPixelIndices(simHitLocalPos, layerIndex, length_u, length_v);
+      WriteSimHitToCsv(simHit, simHitLocalPos, simHitEntryPos, simHitPath, segmentN, layerIndex, i_u_debug, i_v_debug);
     }
 
   } // end loop over sim hits
 
   debug() << "FINISHED event. Processed " << nHitsRead << " simHits. From this, created " << nHitsCreated << " digiHits and dismissed " << nHitsRejected << " simHits." << endmsg;
-  return std::make_tuple(std::move(digiHits), std::move(digiHitsLinks)); // move prevents copy (ie. improves performance), but *might* cause issues with dangling references. For now: do not move ~ Jona 2025-10
-  // return std::make_tuple(digiHits,digiHitsLinks);
+  
+  verbose() << " - Returning collections: digiHits.size()=" << digiHits.size() << ", digiHitsLinks.size()=" << digiHitsLinks.size() << endmsg;
+
+  return std::make_tuple(std::move(digiHits), std::move(digiHitsLinks));
 } // operator()
-
-
-
-
 
 
 
 
 // -- Pixel and in-pixel binning magic --
 
-std::tuple<int, int> VTXdigi_Allpix2::GetPixelIndices(const dd4hep::rec::Vector3D& segmentPos, const int& layer, const double& length_u, const double& length_v) const {
-  int i_u, i_v;
+// general binning function
+int VTXdigi_Allpix2::GetBinIndex(float x, float binX0, float binWidth, int binN) const {
+  /** Get the bin index for a given x value
+   *  binX0 is the lower edge of the first bin
+   *  binWidth is the width of the bins
+   *  binN is the number of bins
+   *  return -1 if x is out of range
+   */
 
-  i_u = GetBinIndex(segmentPos[0], -0.5*length_u, m_pixelPitch_u[layer], m_pixelCount_u[layer]);
-  i_v = GetBinIndex(segmentPos[1], -0.5*length_v, m_pixelPitch_v[layer], m_pixelCount_v[layer]);
+  if (binN <= 0) throw GaudiException("GetBinIndex: binN must be positive", "VTXdigi_Allpix2::GetBinIndex()", StatusCode::FAILURE);
+  if (binWidth <= 0.0) throw GaudiException("GetBinIndex: binWidth must be positive", "VTXdigi_Allpix2::GetBinIndex()", StatusCode::FAILURE);
 
+  float relativePos = (x - binX0) / binWidth;
+  if (relativePos < 0.0f || relativePos > static_cast<float>(binN))
+    return -1;
+  return static_cast<int>(relativePos);
+} // GetBinIndex()
+
+std::tuple<int, int> VTXdigi_Allpix2::GetPixelIndices(const dd4hep::rec::Vector3D& segmentPos, const int layerIndex, const float length_u, const float length_v) const {
+  
+  int i_u = GetBinIndex(
+    segmentPos.x(),
+    -0.5*length_u,
+    m_pixelPitch_u.value().at(layerIndex),
+    m_pixelCount_u.value().at(layerIndex));
+
+  int i_v = GetBinIndex(
+    segmentPos.y(),
+    -0.5*length_v,
+    m_pixelPitch_v.value().at(layerIndex),
+    m_pixelCount_v.value().at(layerIndex));
   return std::make_tuple(i_u, i_v);
-}
+} // GetPixelIndices()
 
-std::tuple<int, int, int> VTXdigi_Allpix2::GetInPixelIndices(const dd4hep::rec::Vector3D& segmentPos, const int& layer, const double length_u, const double length_v) const {
+std::tuple<int, int, int> VTXdigi_Allpix2::GetInPixelIndices(const dd4hep::rec::Vector3D& segmentPos, const int layerIndex, const float length_u, const float length_v) const {
   int j_u, j_v, j_w;
 
-  double shiftedPos = segmentPos[0]+ 0.5*length_u; // segmentPos in [-0.5*sensorSize_u, 0.5*sensorSize_u]. Shift to [0, sensorSize_u]
-  j_u = GetBinIndex(
-    std::fmod(shiftedPos, m_pixelPitch_u[layer]), // , then do modulo pixelPitch_u to get in-pixel position
-    0, m_pixelPitch_u[layer] / m_inPixelBinCount_u.value(), m_inPixelBinCount_u.value() ); // binning: x0, dx, N
+  // compute in-pixel position
+  float shiftedPos_u = segmentPos.x() + 0.5 * length_u; // expected in [0, length_u]
+  float pitch_u = m_pixelPitch_u.value().at(layerIndex);
+  float inPixelPos_u = std::fmod(shiftedPos_u, pitch_u);
+  if (inPixelPos_u < 0.0) inPixelPos_u += pitch_u; // ensure positive remainder
 
-  shiftedPos = segmentPos[1]+0.5*length_v;
-  j_v = GetBinIndex(
-    std::fmod(shiftedPos, m_pixelPitch_v[layer]),
-    0, m_pixelPitch_v[layer] / m_inPixelBinCount_v.value(), m_inPixelBinCount_v.value() );
-  
-  j_w = GetBinIndex(
-  segmentPos[2] + 0.5*m_sensorThickness[layer], // segmentPos in [-0.5*sensorThickness, 0.5*sensorThickness]. Shift to [0, sensorThickness]
-  0, m_sensorThickness[layer] / m_inPixelBinCount_w.value(), m_inPixelBinCount_w.value() );
+  j_u = GetBinIndex(inPixelPos_u, 0.0, pitch_u / m_inPixelBinCount_u.value(), m_inPixelBinCount_u.value());
+
+  float shiftedPos_v = segmentPos.y() + 0.5 * length_v;
+  float pitch_v = m_pixelPitch_v.value().at(layerIndex);
+  float inPixelPos_v = std::fmod(shiftedPos_v, pitch_v);
+  if (inPixelPos_v < 0.0) inPixelPos_v += pitch_v;
+
+  j_v = GetBinIndex(inPixelPos_v, 0.0, pitch_v / m_inPixelBinCount_v.value(), m_inPixelBinCount_v.value());
+
+  // vertical (w) binning: shift to [0, thickness]
+  float shiftedPos_w = segmentPos.z() + 0.5 * m_sensorThickness.value().at(layerIndex);
+  j_w = GetBinIndex(shiftedPos_w, 0.0, m_sensorThickness.value().at(layerIndex) / m_inPixelBinCount_w.value(), m_inPixelBinCount_w.value());
 
   return std::make_tuple(j_u, j_v, j_w);
-}
+} // GetInPixelIndices()
 
-std::tuple<int, int, int, int, int> VTXdigi_Allpix2::ProcessSegment(const dd4hep::rec::Vector3D& simHitEntryPoint, const dd4hep::rec::Vector3D& simHitPath, const int n, const int segmentNumber, const int layer, const double length_u, const double length_v) const {
+dd4hep::rec::Vector3D VTXdigi_Allpix2::GetPixelCenter_Local(const int i_u, const int i_v, const int layerIndex, const dd4hep::rec::ISurface& simSurface) const {
+  // returns the position of the center of pixel i_u, i_v) in the global
+  // u - short ARCADIA axis, corresponds to x in sensor local frame
+  // v - long ARCADIA axis, corresponds to y in sensor local frame
 
-  verbose() << "     - Processing segment " << n << " at position " << (simHitEntryPoint + (n + 0.5) * simHitPath) << " mm" << endmsg;
+  float length_u = simSurface.length_along_u() * 10; // convert to mm (works, checked 2025-10-17)
+  float length_v = simSurface.length_along_v() * 10; // convert to mm 
 
-  const dd4hep::rec::Vector3D segmentPos = simHitEntryPoint + ( ( (static_cast<double>(n)+0.5) / segmentNumber ) * simHitPath); // in mm
-  verbose() << "       - Segment position (local sensor frame): " << segmentPos[0] << " mm, " << segmentPos[1] << " mm, " << segmentPos[2] << " mm" << endmsg;
-  
-  int i_u, i_v; // pixel indices
-  std::tie(i_u, i_v) = GetPixelIndices(segmentPos, layer, length_u, length_v);
-  verbose() << "       - Pixel indices (" << i_u << ", " << i_v << ")" << endmsg;
-  if (i_u==-1 || i_v==-1) {
-    warning() << "       - Segment is outside sensor area. Dismissing." << endmsg;
-    return std::make_tuple(-1, -1, -1, -1, -1);
-  }
-    // segment is outside sensor area
+  float posU = -0.5 * length_u + (i_u + 0.5) * m_pixelPitch_u.value().at(layerIndex); // in mm
+  float posV = -0.5 * length_v + (i_v + 0.5) * m_pixelPitch_v.value().at(layerIndex); // in mm
 
-  int j_u, j_v, j_w; // in-pixel-binning indices
-  std::tie(j_u, j_v, j_w) = GetInPixelIndices(segmentPos, layer, length_u, length_v);
-  verbose() << "       - In-pixel indices (" << j_u << ", " << j_v << ", " << j_w << ")" << endmsg;
-  if (j_u==-1 || j_v==-1 || j_w==-1) {
-    warning() << "       - Segment is inside sensor area, but outside in-pixel binning range. Dismissing." << endmsg;
-    return std::make_tuple(-1, -1, -1, -1, -1);
-  }
-
-  return std::make_tuple(i_u, i_v, j_u, j_v, j_w);
+  return dd4hep::rec::Vector3D(posU, posV, 0.); 
 }
 
 // -- Transformation between global frame and local sensor frame --
@@ -514,7 +613,7 @@ TGeoHMatrix VTXdigi_Allpix2::GetTransformationMatrix(const edm4hep::SimTrackerHi
 }
 
 void VTXdigi_Allpix2::SetProperDirectFrame(TGeoHMatrix& transformationMatrix) const {
-  /** Change the transformationMatrix to have a direct frame with z orthogonal to sensor surface
+  /** Change the transformationMatrix to have a direct frame with z orthogonal to sensor simSurface
    * 
    * copied from https://github.com/jessy-daniel/k4RecTracker/blob/New_Detailed_VTXdigitizer/VTXdigiDetailed/src/VTXdigitizerDetailed.cpp
    * I don't really understand what it does. Defaults to do nothing though, that's ok with me. ~ Jona, 2025-09
@@ -549,10 +648,6 @@ dd4hep::rec::Vector3D VTXdigi_Allpix2::GlobalToLocal(const dd4hep::rec::Vector3D
 
   double localPos[3] = {0, 0, 0};
 
-  // transformationMatrix.MasterToLocal(dd4hep::mm*globalPos, localPos); // globalPos in mm, but matrix in cm
-
-  // return dd4hep::rec::Vector3D(localPos[0]/dd4hep::mm, localPos[1]/dd4hep::mm, localPos[2]/dd4hep::mm);
-
   transformationMatrix.MasterToLocal(globalPos, localPos);
 
   return dd4hep::rec::Vector3D(localPos[0], localPos[1], localPos[2]);
@@ -563,10 +658,6 @@ dd4hep::rec::Vector3D VTXdigi_Allpix2::LocalToGlobal(const dd4hep::rec::Vector3D
   TGeoHMatrix transformationMatrix = GetTransformationMatrix(cellID);
 
   double globalPos[3] = {0, 0, 0};
-
-  // transformationMatrix.LocalToMaster(dd4hep::mm*localPos, globalPos); // both in mm
-
-  // return dd4hep::rec::Vector3D(globalPos[0]/dd4hep::mm, globalPos[1]/dd4hep::mm, globalPos[2]/dd4hep::mm);
 
   transformationMatrix.LocalToMaster(localPos, globalPos);
 
@@ -581,7 +672,7 @@ dd4hep::rec::Vector3D VTXdigi_Allpix2::Vector3dConvert(edm4hep::Vector3d vec) co
 }
 edm4hep::Vector3d VTXdigi_Allpix2::Vector3dConvert(dd4hep::rec::Vector3D vec) const {
   // return edm4hep::Vector3d(vec[0]/dd4hep::mm, vec[1]/dd4hep::mm, vec[2]/dd4hep::mm);
-  return edm4hep::Vector3d(vec[0], vec[1], vec[2]);
+  return edm4hep::Vector3d(vec.x(), vec.y(), vec.z());
 }
 
 void VTXdigi_Allpix2::InitialSensorSizeCheck(const edm4hep::SimTrackerHit& simHit) const {
@@ -592,133 +683,355 @@ void VTXdigi_Allpix2::InitialSensorSizeCheck(const edm4hep::SimTrackerHit& simHi
    */
   
   const std::uint64_t cellID = simHit.getCellID(); 
-  int layer = m_cellIDdecoder->get(cellID, "layer");
-  const dd4hep::rec::ISurface* surface = m_surfaceMap->find(cellID)->second;
-  debug() << "STARTING initial sensor size check for layer " << layer << endmsg;
+  const int layer = m_cellIDdecoder->get(cellID, "layer");
+  const int layerIndex = m_layerToIndex.at(layer);
+  
+  const auto it = m_simSurfaceMap->find(cellID);
+  if (it == m_simSurfaceMap->end() || !(it->second)) {
+    error() << "InitialSensorSizeCheck(): simSurface for cellID " << cellID << " not found or null" << endmsg;
+    throw GaudiException("VTXdigi_Allpix2::InitialSensorSizeCheck: simSurface not found or null", "VTXdigi_Allpix2::InitialSensorSizeCheck(const edm4hep::SimTrackerHit&)", StatusCode::FAILURE);
+  }
+  const dd4hep::rec::ISurface* simSurface = it->second;
+  verbose() << "Initial sensor size check for layer " << layer << ": STARTING" <<endmsg;
 
-  const double length_u = surface->length_along_u() * 10; // convert to mm
-  const double length_v = surface->length_along_v() * 10; // convert to mm
+  const float length_u = simSurface->length_along_u() * 10; // convert to mm
+  const float length_v = simSurface->length_along_v() * 10; // convert to mm
 
   // check sensor size in u, v
-  if ( abs(length_u - m_pixelPitch_u[layer]*m_pixelCount_u[layer]) > 0.00001 ) { // numverical tolerance of 0.01 um
-    error() << "Sensor size in u (" << length_u << " mm) does not match pixel pitch * count (" << m_pixelPitch_u[layer] << " mm * " << m_pixelCount_u[layer] << ") = " << (m_pixelPitch_u[layer] * m_pixelCount_u[layer]) << " mm for layer " << layer << " (defined in options file). Abort." << endmsg;
+  if ( abs(length_u - m_pixelPitch_u.value().at(layerIndex)*m_pixelCount_u.value().at(layerIndex)) > 0.00001 ) { // numverical tolerance of 0.01 um
+    error() << "Sensor size in u (" << length_u << " mm) does not match pixel pitch * count (" << m_pixelPitch_u.value().at(layerIndex) << " mm * " << m_pixelCount_u.value().at(layerIndex) << ") = " << (m_pixelPitch_u.value().at(layerIndex) * m_pixelCount_u.value().at(layerIndex)) << " mm for layer " << layer << " (defined in options file). Abort." << endmsg;
     throw std::runtime_error("VTXdigi_Allpix2::InitialSensorSizeCheck: Sensor size in u does not match pixel pitch * count");
   }
-  if ( abs(length_v - m_pixelPitch_v[layer]*m_pixelCount_v[layer]) > 0.00001 ) { // numverical tolerance of 0.01 um
-    error() << "Sensor size in v (" << length_v << " mm) does not match pixel pitch * count (" << m_pixelPitch_v[layer] << " mm * " << m_pixelCount_v[layer] << ") = " << (m_pixelPitch_v[layer] * m_pixelCount_v[layer]) << " mm for layer " << layer << " (defined in options file). Abort." << endmsg;
+  if ( abs(length_v - m_pixelPitch_v.value().at(layerIndex)*m_pixelCount_v.value().at(layerIndex)) > 0.00001 ) { // numverical tolerance of 0.01 um
+    error() << "Sensor size in v (" << length_v << " mm) does not match pixel pitch * count (" << m_pixelPitch_v.value().at(layerIndex) << " mm * " << m_pixelCount_v.value().at(layerIndex) << ") = " << (m_pixelPitch_v.value().at(layerIndex) * m_pixelCount_v.value().at(layerIndex)) << " mm for layer " << layer << " (defined in options file). Abort." << endmsg;
     throw std::runtime_error("VTXdigi_Allpix2::InitialSensorSizeCheck: Sensor size in v does not match pixel pitch * count");
   }
   
-  m_initialSensorSizeCheckPassed.insert(layer);
-  debug() << "PASSED initial sensor size check for layer " << layer << ": " << endmsg;
+  m_initialSensorSizeCheckPassed.insert(layerIndex);
+  verbose() << "Initial sensor size check for layer " << layer << " (index " << layerIndex << "): PASSED" <<endmsg;
   return;
 }
-dd4hep::rec::Vector3D VTXdigi_Allpix2::GetPixelCenter_Local(const int& i_u, const int& i_v, const int& layer, const dd4hep::rec::ISurface& surface) const {
-  // returns the position of the center of pixel i_u, i_v) in the global
-  // u - short ARCADIA axis, corresponds to x in sensor local frame
-  // v - long ARCADIA axis, corresponds to y in sensor local frame
 
-  const double length_u = surface.length_along_u() * 10; // convert to mm
-  const double length_v = surface.length_along_v() * 10; // convert to mm
+bool VTXdigi_Allpix2::ApplySimHitCuts (const dd4hep::rec::ISurface& simSurface, const int layerIndex, const float eDeposition, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const dd4hep::rec::Vector3D& simHitGlobalPos) const {
 
-  double posU = (-0.5*length_u) + (i_u + 0.5)*m_pixelPitch_u[layer]; // in mm
-  double posV = (-0.5*length_v) + (i_v + 0.5)*m_pixelPitch_v[layer]; // in mm
-
-  return dd4hep::rec::Vector3D(posU, posV, 0); 
-}
-
-bool VTXdigi_Allpix2::ApplySimHitCuts (int layer, double eDeposition) const {
-  // DISMISS if layer is not in the list of layers to digitize
-  if (m_layersToDigitize.value().size()>0) {
-    // only digitize hits in the layers specified by the user
-    if (std::find(m_layersToDigitize.value().begin(), m_layersToDigitize.value().end(), layer) == m_layersToDigitize.value().end()) {
-      debug() << "   - DISMISSED SimHit in layer " << layer << ". (not in the list of layers to digitize)" << endmsg;
-      m_counters.at(counter_simHitsRejected_LayerNotToBeDigitized)++;
+  // DISMISS if simHitPosition is not on the DD4hep sensor simSurface
+  if (m_cutDistanceToSurface) {
+    if (abs(simSurface.distance(dd4hep::mm * simHitGlobalPos)) > m_numericLimit_float) {
+      verbose() << "   - DISMISSED simHit (is not on the DD4hep sensor simSurface (distance = " << simSurface.distance(dd4hep::mm * simHitGlobalPos) * 1000 << " um)." << endmsg; // convert to um
+      m_counters.at(counter_simHitsRejected_SurfaceDistToLarge)++;
       return false;
     }
   }
+  
+  // DISMISS if entry point is outside sensor
+  if (m_cutPathOutsideSensor) {
+    if (abs(simHitEntryPos.z()) > m_sensorThickness.value().at(layerIndex) / 2 + m_numericLimit_float) { // entry point is outside sensor thickness
+      verbose() << "   - DISMISSED simHit (entry point is outside sensor thickness (local w = " << simHitEntryPos.z()*1000 << " um, sensor thickness = " << m_sensorThickness.value().at(layerIndex)*1000 << " um)." << endmsg;
+      m_counters.at(counter_simHitsRejected_OutsideSensor)++;
+      return false;
+    }
+    if (abs(simHitEntryPos.z()+simHitPath.z()) > m_sensorThickness.value().at(layerIndex) / 2 + m_numericLimit_float) { // exit point is outside sensor thickness
+      verbose() << "   - DISMISSED simHit (exit point is outside sensor thickness (local w = " << (simHitEntryPos.z()+simHitPath.z())*1000 << " um, sensor thickness = " << m_sensorThickness.value().at(layerIndex)*1000 << " um)." << endmsg;
+      m_counters.at(counter_simHitsRejected_OutsideSensor)++;
+      return false;
+    }
+  }
+  
   // DISMISS if outside minimum energy cut
-  if (eDeposition < m_minDepositedEnergy) {
+  if (eDeposition < m_cutDepositedEnergy.value()) {
     m_counters.at(counter_simHitsRejected_EnergyCut)++;
-    debug() << "   - DISMISSED simHit (energy below cut, " << eDeposition << " keV)" << endmsg;
+    verbose() << "   - DISMISSED simHit (energy below cut, " << eDeposition << " keV)" << endmsg;
     return false;
   }
+  
   return true;
 }
 
-std::tuple<dd4hep::rec::Vector3D, dd4hep::rec::Vector3D> VTXdigi_Allpix2::GetSimHitPath (const edm4hep::SimTrackerHit& simHit) const {
-  /** Get the path direction (unit vector), entry point (local frame), segmentEdep, segmentLength and segmentNumber for a given simHit
-   * 
+std::tuple<dd4hep::rec::Vector3D, dd4hep::rec::Vector3D> VTXdigi_Allpix2::GetSimHitPath (const edm4hep::SimTrackerHit& simHit, const int layerIndex, const float length_u, const float length_v) const {
+  /** Get the simHitPath (the path of the simulated particle through a sensor) of a given simHit. Describet by the path direction (unit vector) and entry point (local frame).
+   *  
+   * The way I do this differs from what Jessy does in their vtxDigi Detailed.
+   *  My approach ensures that the simHitPath always extends exactly from one sensor surface to the other, and that the simHitPos always lies on this path. 
+   * Then, the paths are shortened to the PathLength that Geant4 gives us, if they are longer (the Geant4 pathLength is always longer than the linear approx., because it accounts for B-field and multiple scattering inside the sensor). We need to do this to avoid unphysically long paths, where the energy-per-pathLength would be unphysically tiny
+   *  I am not sure if this is better or worse, it definitely produces less problems. 
+   *  I think the assumption of a linear path through the sensor is not compatible with using the path-length as normalisation for the path-vector
    */
 
-  // Get the global position of the hit (defined by default in Geant4 as the mean between the entry and exit point in the active material) and apply unit transformation (translation matrix is stored in cm)
+  const float pathLength_Geant4 = simHit.getPathLength(); // in mm
 
-  double simHitGlobalCentralPos[3] = {simHit.getPosition().x, simHit.getPosition().y, simHit.getPosition().z}; // given in mm
-
-  double simHitGlobalMomentum[3] = {simHit.getMomentum().x * dd4hep::GeV, simHit.getMomentum().y * dd4hep::GeV, simHit.getMomentum().z * dd4hep::GeV};
-
-  // convert to local detector frame
   const dd4hep::DDSegmentation::CellID& cellID = simHit.getCellID();
+  
+  // get simHit Position (as calculated by Geant4), transfer to sensor's local coordinates
+  const dd4hep::rec::Vector3D simHitGlobalPos = Vector3dConvert(simHit.getPosition());
+  dd4hep::rec::Vector3D simHitPos = GlobalToLocal( simHitGlobalPos, cellID);
+  
+  // get simHitMomentum (this vector gives the exact agles of the particle's path through the sensor. We assume that path is linear.). Transform to sensor's local coordinates.
+  double simHitGlobalMomentum_double[3] = {simHit.getMomentum().x * dd4hep::GeV, simHit.getMomentum().y * dd4hep::GeV, simHit.getMomentum().z * dd4hep::GeV}; // need floats for the TransfomationMatrix functions
 
   TGeoHMatrix transformationMatrix = GetTransformationMatrix(cellID);
-  double simHitLocalCentralPos[3] = {0, 0, 0};
-  double simHitLocalMomentum[3] = {0, 0, 0};
 
-  // get the simHit coordinate in cm in the sensor reference frame
+  double simHitLocalMomentum_double[3] = {0.0, 0.0, 0.0};
+  transformationMatrix.MasterToLocalVect(simHitGlobalMomentum_double, simHitLocalMomentum_double);
 
-  transformationMatrix.MasterToLocal(simHitGlobalCentralPos, simHitLocalCentralPos);
-  transformationMatrix.MasterToLocalVect(simHitGlobalMomentum, simHitLocalMomentum);
+  dd4hep::rec::Vector3D simHitPath(
+    simHitLocalMomentum_double[0],
+    simHitLocalMomentum_double[1],
+    simHitLocalMomentum_double[2]);
 
-  // create vector of direction, normalized to path length
-  dd4hep::rec::Vector3D simHitPath(simHitLocalMomentum[0], simHitLocalMomentum[1], simHitLocalMomentum[2]);
-  simHitPath = (simHit.getPathLength() / simHitPath.r()) * simHitPath; // normalize to path length
+  const double sensorThickness = m_sensorThickness.value().at(layerIndex);
 
-  // get vector of entry point position
-  dd4hep::rec::Vector3D simHitEntryPoint(simHitLocalCentralPos[0], simHitLocalCentralPos[1], simHitLocalCentralPos[2]); // This is the central point of the path as of now
-  simHitEntryPoint = simHitEntryPoint - 0.5 * simHitPath; // entry point is half a path-length upstream of central position
+  float scaleFactor = sensorThickness / std::abs(simHitLocalMomentum_double[2]);
+  simHitPath = scaleFactor * simHitPath ; // now, simHitPath extends for one sensor surface to the other surface
+  // edge case with curlers having horizontal momentum is handled later, by cutting the path to the length supplied by Geant4.
+  
+  // calculate the path's entry position into the sensor, by placing it such that the path passes through the simHit position
+  if (abs(simHitPos.z()) > (0.5*sensorThickness + m_numericLimit_float)) {
+    warning() << "SimHit position is outside the sensor volume (local w = " << simHitPos.z() << " mm, sensor thickness = " << sensorThickness << " mm). This should never happen. Forcing it to w=0." << endmsg;
+    simHitPos.z() = 0.;
+  }
+  
+  // calculate how far the entry point is from the simHitPos, in terms of the simHitPath
+  scaleFactor = 0.;
+  if (simHitPath.z() >= 0.) {
+    const float shiftDist_w = 0.5 * sensorThickness + simHitPos.z();
+    scaleFactor = shiftDist_w / simHitPath.z();
+  }
+  else {
+    const float shiftDist_w = -0.5 * sensorThickness + simHitPos.z();
+    scaleFactor = shiftDist_w / simHitPath.z();
+  }
+  
+  // Entry position is on either surface of the sensor, upstream from the simHit position (exactly by the fraction we just calculated)
+  dd4hep::rec::Vector3D simHitEntryPos = simHitPos - scaleFactor * simHitPath;
 
-  // TODO: Maybe add a check that the point is inside the material or go to the closest material and do the same for exit point and then redefine the length (Jessy had this comment already) ~ Jona, 2025-09
+  // Clip the path to the sensor edges in u and v direction (if it passes through the side of the sensor)
+  // parametric line: P(t) = simHitEntryPos + t * simHitPath, t in [0,1]
+  float t_min = 0.0, t_max = 1.0;
+  
+  const float u_min = std::min(simHitEntryPos.x(), simHitEntryPos.x() + simHitPath.x());
+  if (u_min < -0.5*length_u - m_numericLimit_float) {
+    verbose() << "   - SimHitPath extends outside sensor in -u direction (local u = " << u_min*1000 << " um, sensor edge at " << -0.5*length_u*1000 << " um). Clipping path to sensor edge." << endmsg;
+    
+    if (simHitPath.x() > 0.)
+    // path goes in positive u-direction
+    t_min = std::max(t_min, static_cast<float>(-(simHitEntryPos.x() + 0.5*length_u) / simHitPath.x()));
+    else
+    t_max = std::min(t_max, static_cast<float>(-(simHitEntryPos.x() + simHitPath.x() + 0.5*length_u) / simHitPath.x()));
+  }
+  
+  const float u_max = std::max(simHitEntryPos.x(), simHitEntryPos.x() + simHitPath.x());
+  if (u_max > 0.5*length_u + m_numericLimit_float) {
+    verbose() << "   - SimHitPath extends outside sensor in +u direction (local u = " << u_max*1000 << " um, sensor edge at " << 0.5*length_u*1000 << " um). Clipping path to sensor edge." << endmsg;
+    
+    if (simHitPath.x() > 0.)
+    // path goes in positive u-direction
+    t_max = std::min(t_max, static_cast<float>((simHitEntryPos.x()+simHitPath.x() - 0.5*length_u) / simHitPath.x()));
+    else
+    t_min = std::max(t_min, static_cast<float>((simHitEntryPos.x() - 0.5*length_u) / simHitPath.x()));
+  }
+  
+  // v boundaries
+  const float v_min = std::min(simHitEntryPos.y(), simHitEntryPos.y() + simHitPath.y());
+  if (v_min < -0.5*length_v - m_numericLimit_float) {
+    verbose() << "   - SimHitPath extends outside sensor in -v direction (local v = " << v_min*1000 << " um, sensor edge at " << -0.5*length_v*1000 << " um). Clipping path to sensor edge." << endmsg;
+    
+    if (simHitPath.y() > 0.)
+    t_min = std::max(t_min, static_cast<float>(-(simHitEntryPos.y() + 0.5*length_v) / simHitPath.y()));
+    else
+    t_max = std::min(t_max, static_cast<float>(-(simHitEntryPos.y()+simHitPath.y() + 0.5*length_v) / simHitPath.y()));
+  }
+  
+  const float v_max = std::max(simHitEntryPos.y(), simHitEntryPos.y() + simHitPath.y());
+  if (v_max > 0.5*length_v + m_numericLimit_float) {
+    verbose() << "   - SimHitPath extends outside sensor in +v direction (local v = " << v_max*1000 << " um, sensor edge at " << 0.5*length_v*1000 << " um). Clipping path to sensor edge." << endmsg;
+    
+    if (simHitPath.y() > 0.)
+    t_max = std::min(t_max, static_cast<float>((simHitEntryPos.y()+simHitPath.y() - 0.5*length_v) / simHitPath.y()));
+    else
+    t_min = std::max(t_min, static_cast<float>((simHitEntryPos.y() - 0.5*length_v) / simHitPath.y()));
+  }
+  
+  // Apply clipping
+  if (0. <= t_min && t_min <= t_max && t_max <= 1.) {
+    simHitEntryPos = simHitEntryPos + t_min * simHitPath;
+    simHitPath = (t_max - t_min) * simHitPath;
+    
+    // if pathLength given by Geant4 is more than 5% shorter than the length we calculate, shorten our calculated path accordingly
 
-  return std::make_tuple(simHitPath, simHitEntryPoint);
+    if (simHitPath.r() > m_pathLengthShorteningFactorGeant4 * pathLength_Geant4) {
+      verbose() << "   - Shortening simHitPath from " << simHitPath.r() << " mm to Geant4 pathLength of " << pathLength_Geant4 << " mm, because it's length is more than " << m_pathLengthShorteningFactorGeant4 << " of the Geant4 path length." << endmsg;
+      const float length_factor = pathLength_Geant4 / simHitPath.r();
+      simHitPath = length_factor * simHitPath;
+      
+      // TODO check that the path is still centered around & passes through simHitPos (this should always be the case, if the path doesnt start inside the sensor volume for some reason). I don't know how to do this with reasonable efficiency, though. ~ Jona, 2025-10
+    }
+  } else {
+    warning() << "GetSimHitPath(): Cannot clip simHitPath to sensor edges. The path lies completely outside the sensor volume. Clipping t_min = " << t_min << ", t_max = " << t_max << "." << endmsg;
+    verbose() << "   - before clipping: EntryPos: (" << simHitEntryPos.x() << " mm, " << simHitEntryPos.y() << " mm, " << simHitEntryPos.z() << " mm), exitPos: (" << simHitPath.x() << " mm, " << simHitPath.y() << " mm, " << simHitPath.z() << " mm)" << endmsg;
+    m_debugFlag = true;
+    // return std::make_tuple(dd4hep::rec::Vector3D(0.0, 0.0, 0.0), dd4hep::rec::Vector3D(0.0, 0.0, 0.0));
+  }
+
+  verbose() << "   - Calculated SimHitPath with length " << simHitPath.r() << " mm" << " (the Geant4 path length is " << pathLength_Geant4 << " mm)" << endmsg;
+  return std::make_tuple(simHitEntryPos, simHitPath);
+  
+  
+  
+  
+  
+  
+  
+  /* What I do here is a bit counter-intuitive, but I can't think of a better way.
+   * 
+   * simHitPos - this is the position where the simulated particle trajectory crosses the DD4hep simSurface (typically, the simSurface with lie at half depth in the sensor)
+   * simHitPath - the direction of the particle's path. Because I get it from the momentum, the length is not related to the path length.
+   * 
+   * If the particle hits far away from the sensor edge, the simHitPos will lie exactly at the center of the center, on the simSurface. The path will then extend half the path length in each direction from this point, and lie completely inside the sensor volume. This is the ideal (and most common) case.
+   * 
+   * But, if the particle enters or exits through the sensors edge (on the side), the simHitPos will still lie on the simSurface, but the path will not be centered around it. Instead, the path will extend from outside the sensor volume to inside (or vice versa). This means that if I just take simHitPos - 0.5*simHitPath as entry point, the entry point will lie not lie on the sensors (actual) surface, but inside/outside. 
+  */
+
+
+  // // first, catch cases where the path extends outside the sensor. that is bad, and I have no idea how that happens. Maybe slow particles have helix-shaped path through sensor, and our linear approximation of that path breaks down. ~Jona, 2025-10
+  // if ( abs(simHitEntryPos.z()) > (0.5*sensorThickness + m_numericLimit_float) || abs(simHitEntryPos.z()+simHitPath.z()) > (0.5*sensorThickness + m_numericLimit_float)) {
+  //   warning() << "SimHitPath extends out of the sensor volume(entry / exit at local vertical position" << simHitEntryPos.z() << " / " << simHitEntryPos.z()+simHitPath.z() << "mm for sensor thickness " << sensorThickness << "mm. Shortening to fit within sensor." << endmsg;
+
+  //   // rescale simHitPath to have vertical length of sensorThickness
+  //   double length_factor = sensorThickness / simHitPath.z();
+  //   simHitPath = length_factor * simHitPath;
+  //   simHitEntryPos = simHitPos - 0.5*simHitPath;
+  // }
+
+  // // now the edge-case: if the entry (and implicitely, the exit) are inside the sensor volume, we need to move the entry point, it is likely
+  // if ( std::abs(simHitEntryPos.z()) < (0.5*sensorThickness - m_numericLimit_float) ) {
+  //   // m_debugFlag = true;
+  //   info() << "   - SimHit entry has vertical position inside sensor volume (local w = " << simHitEntryPos.z()*1000 << " um, sensor thickness = " << m_sensorThickness.value().at(layerIndex)*1000 << " um). Attempting to shift entry point to place it on sensor surface." << endmsg;
+  //   // calculate the necessary shift factor in terms of simHitPath
+  //   const double shiftDistance_w = 0.5 * (m_sensorThickness.value().at(layerIndex) - std::abs(simHitPath.z()));
+  //   const double shiftFactor = shiftDistance_w / std::abs(simHitPath.z());
+
+  //   // figure out in which direction we need to shift by comparing it to the sensor dimension. Local coordinates always go from -length/2 to +length/2
+  //   dd4hep::rec::Vector3D simHitEntryPos_new = simHitEntryPos + shiftFactor * simHitPath;
+  //   dd4hep::rec::Vector3D simHitExitPos_new = simHitEntryPos_new + simHitPath;
+  //   // check if shift in positive direction works (this is the most common case, particle enters on the side, exits on top)
+  //   if ( std::abs(simHitEntryPos_new.x()) <= 0.5 * length_u + m_numericLimit_float
+  //     && std::abs(simHitEntryPos_new.y()) <= 0.5 * length_v + m_numericLimit_float
+  //     && std::abs(simHitExitPos_new.x()) <= 0.5 * length_u + m_numericLimit_float
+  //     && std::abs(simHitExitPos_new.y()) <= 0.5 * length_v + m_numericLimit_float ) {
+  //     // shift in positive direction works
+
+  //     simHitEntryPos = simHitEntryPos_new;
+  //     verbose() << "   - SimHit entry pos. was not on sensor surface (local w = " << simHitEntryPos.z()*1000 << " um, sensor thickness = " << m_sensorThickness.value().at(layerIndex)*1000 << " um). Shifted entry point by +" << shiftFactor * simHitPath.z() << " to place it on sensor surface." << endmsg;
+  //   } else {
+  //     simHitEntryPos_new = simHitEntryPos - shiftFactor * simHitPath;
+  //     if ( std::abs(simHitEntryPos_new.x()) <= 0.5 * length_u + m_numericLimit_float
+  //       && std::abs(simHitEntryPos_new.y()) <= 0.5 * length_v + m_numericLimit_float
+  //       && std::abs(simHitExitPos_new.x()) <= 0.5 * length_u + m_numericLimit_float
+  //       && std::abs(simHitExitPos_new.y()) <= 0.5 * length_v + m_numericLimit_float ) {
+  //       // positive direction works
+
+  //       simHitEntryPos = simHitEntryPos_new;
+  //       verbose() << "   - SimHit entry pos. was not on sensor surface (local w = " << simHitEntryPos.z()*1000 << " um, sensor thickness = " << m_sensorThickness.value().at(layerIndex)*1000 << " um). Shifted entry point by -" << shiftFactor * simHitPath.z() << " to place it on sensor surface." << endmsg;
+  //       }
+  //     else {
+  //       // From my understanding, this means the particle entered on one side, exits on another (across corner).
+
+  //       warning() << "   - SimHit entry pos. was not on sensor surface (simHitPath IS LIKELY ACROSS A CORNER) (local w = " << simHitEntryPos.z()*1000 << " um, sensor thickness = " << m_sensorThickness.value().at(layerIndex)*1000 << " um). Tried to shift entry point by " << shiftFactor * simHitPath.z() << " in both directions, neither lead to both entry and exit points being inside the sensor volume. Discarding." << endmsg;
+  //       return std::make_tuple(simHitPath, simHitEntryPos); // return original entry point and path, segments outside sensor volume will be discarded later
+  //     } 
+  //   }
+  // } // entry point not on sensor surface
+  
+  /* TODO: Maybe add a check that the point is inside the material or go to the closest material and do the same for exit point and then redefine the length (Jessy had this comment already) ~ Jona, 2025-09.
+   * Attempted above, not sure if it works. ~ Jona 2025-10
+   */
 }
 
-int VTXdigi_Allpix2::GetBinIndex(float x, float binX0, float binWidth, int binN) const {
-  /** Get the bin index for a given x value
-   *  binX0 is the lower edge of the first bin
-   *  binWidth is the width of the bins
-   *  binN is the number of bins
-   *  return -1 if x is out of range
+std::tuple<int, int, int, int, int> VTXdigi_Allpix2::ProcessSegment(const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const int segment, const int segmentN, const int layerIndex, const float length_u, const float length_v) const {
+  /* Get the segment position, calculate pixel indices and in-pixel indices.
+   * 
+   * If segment is outside sensor area, return (-1,-1,-1,-1,-1)
    */
+ verbose() << "     - The pathLength is " << simHitPath.r()*1000 << " um" << endmsg;
+  if (segmentN <= 0 || segment < 0 || segment >= segmentN) {
+    error() << "ProcessSegment(): Invalid segment number " << segmentN << " or segment index " << segment << endmsg;
+    throw std::runtime_error("VTXdigi_Allpix2::ProcessSegment(): Invalid segment number or segment index");
+  }
 
-  int binIndex = static_cast<int>((x - binX0) / binWidth);
-  // debug() << "         - GetBinIndex: x = " << x << ", binX0 = " << binX0 << ", binWidth = " << binWidth << ", binN = " << binN << " => binIndex = " << binIndex << endmsg;
-  if (binIndex < 0 || binIndex >= binN) 
-    return -1;
-  return binIndex;
-} // GetBinIndex()
+  float pathFraction = (static_cast<float>(segment)+0.5) / segmentN;
+  const dd4hep::rec::Vector3D segmentRelativePos = pathFraction * simHitPath; // in mm
+  verbose() << "     - Processing segment " << segment << " out of " << segmentN << " at fraction " << pathFraction << " with length " << segmentRelativePos.r()*1000 << " um" << endmsg;
+  verbose() << "     - The pathLength is " << simHitPath.r()*1000 << " um" << endmsg;
 
 
+  const dd4hep::rec::Vector3D segmentPos = simHitEntryPos + segmentRelativePos; // in mm
+  verbose() << "         - Local position (u,v,w): (" << segmentPos.x() << " mm, " << segmentPos.y() << " mm, " << segmentPos.z() << " mm)" << endmsg;
+  int i_u, i_v; // pixel indices
+  std::tie(i_u, i_v) = GetPixelIndices(segmentPos, layerIndex, length_u, length_v);
+  verbose() << "         - Pixel indices (" << i_u << ", " << i_v << ")" << endmsg;
+  if (i_u==-1 || i_v==-1) {
+    warning() << "ProcessSegment(): Segment lies outside sensor area (in u or v). Dismissing." << endmsg;
+    m_debugFlag = true;
+    return std::make_tuple(-1, -1, -1, -1, -1);
+  }
+    // segment is outside sensor area
 
-void VTXdigi_Allpix2::CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const double eDeposition, const edm4hep::Vector3d& position) const {
+  int j_u, j_v, j_w; // in-pixel-binning indices
+  std::tie(j_u, j_v, j_w) = GetInPixelIndices(segmentPos, layerIndex, length_u, length_v);
+  verbose() << "         - In-pixel indices (" << j_u << ", " << j_v << ", " << j_w << ")" << endmsg;
+  if (j_u==-1 || j_v==-1 || j_w==-1) {
+    warning() << "ProcessSegment(): Segment lies inside sensor area (in u and v), but vertically outside sensor volume. Dismissing." << endmsg;
+    m_debugFlag = true;
+    return std::make_tuple(-1, -1, -1, -1, -1);
+  }
 
+  return std::make_tuple(i_u, i_v, j_u, j_v, j_w);
+}
+
+void VTXdigi_Allpix2::CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const float eDeposition, const edm4hep::Vector3d& position) const {
+  
   auto digiHit = digiHits.create();
   digiHit.setCellID(simHit.getCellID());
   digiHit.setEDep(eDeposition);
   digiHit.setPosition(position);
-  // TODO: check if position is within sensor bounds & force it onto sensor surface ~ Jona 2025-09
+  // TODO: check if position is within sensor bounds & force it onto sensor simSurface ~ Jona 2025-09
   digiHit.setTime(simHit.getTime());
-
+  
   auto digiHitLink = digiHitsLinks.create();
   digiHitLink.setFrom(digiHit);
   digiHitLink.setTo(simHit);
 
-  // debug() << "CREATED digiHit with ID " << digiHit.getCellID() << " and Edep " << eDeposition << " keV" << endmsg;
+    // verbose() << "CREATED digiHit with ID " << digiHit.getCellID() << " and Edep " << eDeposition << " keV" << endmsg;
   return;
 }
-void VTXdigi_Allpix2::CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const double eDeposition, const dd4hep::rec::Vector3D& position) const {
+void VTXdigi_Allpix2::CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const float eDeposition, const dd4hep::rec::Vector3D& position) const {
   // overload to allow passing dd4hep::rec::Vector3D as position. ~ Jona 2025-09
 
   CreateDigiHit(simHit, digiHits, digiHitsLinks, eDeposition, edm4hep::Vector3d(position[0], position[1], position[2]));
   return;
 }
 
+void VTXdigi_Allpix2::WriteSimHitToCsv(const edm4hep::SimTrackerHit& simHit, const dd4hep::rec::Vector3D& simHitPos, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const int segmentN, const int layerIndex, const int i_u, const int i_v) const {
+
+
+  if (!m_debugCsvFile.is_open()) {
+    error() << "WriteSimHitToCsv(): DebugCsv file is not open." << endmsg;
+    return;
+  }
+
+  // eventNumber,layerIndex,segmentCount,sensorThickness,pix_u,pix_v,
+  // simHitPos_u,simHitPos_v,simHitPos_w,
+  // simHitEntryPos_u,simHitEntryPos_v,simHitEntryPos_w,
+  // simHitPath_u,simHitPath_v,simHitPath_w,
+  // pathLengthGeant4,pathLength,energyDeposition,debugFlag
+
+  m_debugCsvFile << std::to_string(m_eventNumber) << "," << layerIndex << "," << segmentN << ","  << m_sensorThickness.value().at(layerIndex) << "," << i_u << "," << i_v << ",";
+
+  m_debugCsvFile << simHitPos[0] << "," << simHitPos[1] << "," << simHitPos[2] << ",";
+  m_debugCsvFile << simHitEntryPos[0] << "," << simHitEntryPos[1] << "," << simHitEntryPos[2] << ",";
+  m_debugCsvFile << simHitPath[0] << "," << simHitPath[1] << "," << simHitPath[2] << ",";
+  m_debugCsvFile << simHit.getPathLength() << "," << simHitPath.r() << "," << simHit.getEDep() <<  "," << m_debugFlag << "\n";
+  m_debugCsvFile.flush();
+  verbose() << "Wrote simHit with event " << m_eventNumber << ", layerIndex " << layerIndex << ", segmentN " << segmentN << ", i_u " << i_u << ", i_v " << i_v << " to debug CSV file." << endmsg;
+  return;
+}

@@ -39,6 +39,10 @@
 #include <vector>
 #include <cmath> // for std::fmod
 
+// for debugging-csv
+#include <iostream>
+#include <fstream>  // for std::ofstream
+
 #include "GAUDI_VERSION.h"
 
 #if GAUDI_MAJOR_VERSION < 39 // don't really have a clue why we need this, assume it's important ~ Jona 2025-09
@@ -69,9 +73,6 @@ struct VTXdigi_Allpix2 final
 
   std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> operator() (const edm4hep::SimTrackerHitCollection& simHits, const edm4hep::EventHeaderCollection& headers) const override;
 
-private:
-
-
   // -- Transformation between global frame and local sensor frame
 
   /** Get the transformation matrix to the local sensor frame */
@@ -80,7 +81,7 @@ private:
 
   /** adjust the transformation matrix to the local sensor frame, so that it is x-u, y-v, z-n and right-handed. Uses user-input "LocalNormalVectorDir" */
   void SetProperDirectFrame(TGeoHMatrix& sensorTransformMatrix) const;
-
+  
   /** Transform a global position to the local sensor frame of a hit, given its cellID */
   dd4hep::rec::Vector3D GlobalToLocal(const dd4hep::rec::Vector3D& globalPos, const dd4hep::DDSegmentation::CellID& cellID) const;
 
@@ -94,67 +95,71 @@ private:
   dd4hep::rec::Vector3D Vector3dConvert(edm4hep::Vector3d vec) const;
   edm4hep::Vector3d Vector3dConvert(dd4hep::rec::Vector3D vec) const;
 
-  /** Check that the pixel pitch and count match the sensor size in the geometry
-   */
-  void InitialSensorSizeCheck(const edm4hep::SimTrackerHit& simHit) const;
-    
-  /** Apply cuts to a simHit. Returns true if the hit is accepted, false if dismissed. */
-  bool ApplySimHitCuts (int layer, double eDeposited) const;
-
+  
   /** Calculate the entry point and path vector of a simHit in local sensor frame. */
-  std::tuple<dd4hep::rec::Vector3D, dd4hep::rec::Vector3D> GetSimHitPath(const edm4hep::SimTrackerHit& simHit) const;
-
+  std::tuple<dd4hep::rec::Vector3D, dd4hep::rec::Vector3D> GetSimHitPath(const edm4hep::SimTrackerHit& simHit, const int layerIndex, const float length_u, const float length_v) const;
+  
   /**Given a histogram definition (x0, binWidth, nBins) and a value x, return the bin index in which x falls.
    * Returns -1 if x is out of range.
    * Bins are 0-indexed (vs ROOT's 1-indexing) */
   int GetBinIndex(float x, float binX0, float binWidth, int binN) const;
 
   /** Get the pixel indices (i_u, i_v) for a given position inside the sensor */
-  std::tuple<int, int> GetPixelIndices(const dd4hep::rec::Vector3D& pos, const int& layer, const double& length_u, const double& length_v) const;
-
+  std::tuple<int, int> GetPixelIndices(const dd4hep::rec::Vector3D& pos, const int layerIndex, const float length_u, const float length_v) const;
+  
   /** Get the in-pixel indices (j_u, j_v, j_w) for a given position inside the pixel and layer index
    *  Assumption: each layer has only 1 type if sensor */
-  std::tuple<int, int, int> GetInPixelIndices(const dd4hep::rec::Vector3D& pos, const int& layer, const double length_u, const double length_v) const;
+  std::tuple<int, int, int> GetInPixelIndices(const dd4hep::rec::Vector3D& pos, const int layerIndex, const float length_u, const float length_v) const;
 
-  std::tuple<int, int, int, int, int> ProcessSegment(const dd4hep::rec::Vector3D& simHitEntryPoint, const dd4hep::rec::Vector3D& simHitPath, const int n, const int segmentNumber, const int layer, const double length_u, const double length_v) const;
-
-  /** Create a digitized hit */
-  void CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const double eDeposition, const dd4hep::rec::Vector3D& position) const;
-  void CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const double eDeposition, const edm4hep::Vector3d& position) const;
-  
   /** Get the local position of a pixel center (u,v,0) */
-  dd4hep::rec::Vector3D GetPixelCenter_Local(const int& i_u, const int& i_v, const int& layer, const dd4hep::rec::ISurface& surface) const;
+  dd4hep::rec::Vector3D GetPixelCenter_Local(const int i_u, const int i_v, const int layerIndex, const dd4hep::rec::ISurface& simSurface) const;
+  
+  std::tuple<int, int, int, int, int> ProcessSegment(const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const int n, const int segmentNumber, const int layerIndex, const float length_u, const float length_v) const;
 
-
-
+  
+  
+  private:
+  /** Check that the pixel pitch and count match the sensor size in the geometry
+   */
+  void InitialSensorSizeCheck(const edm4hep::SimTrackerHit& simHit) const;
+    
+  /** Apply cuts to a simHit. Returns true if the hit is accepted, false if dismissed. */
+  bool ApplySimHitCuts(const dd4hep::rec::ISurface& simSurface, const int layerIndex, const float eDeposition, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const dd4hep::rec::Vector3D& simHitGlobalPos) const;
+  
+  /** Create a digitized hit */
+  void CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const float eDeposition, const dd4hep::rec::Vector3D& position) const;
+  void CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const float eDeposition, const edm4hep::Vector3d& position) const;
+  /** Write simHit position & path information to a CSV file */
+  void WriteSimHitToCsv(const edm4hep::SimTrackerHit& simHit, const dd4hep::rec::Vector3D& simHitPos, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const int segmentNumber, const int layerIndex, const int i_u, const int i_v) const;
+  
   // -- Properties --
 
   Gaudi::Property<std::string> m_subDetName{this, "SubDetectorName", "VXD", "Name of the subdetector"};
   Gaudi::Property<bool> m_isStrip{this, "IsStrip", false, "Whether the hits are 1D strip hits"};
-  Gaudi::Property<double> m_minDepositedEnergy{this, "MinDepositedEnergy", 0.0, "Minimum energy (GeV) of SimTrackerHit to be digitized"};
-  Gaudi::Property<double> m_targetPathSegmentLength{this, "TargetPathSegmentLength", 0.002, "Length of the path segments, that the simHits path through a sensor is divided into. In mm. Defines the precision of the charge deposition along the path."};
-
   Gaudi::Property<std::string> m_geometryServiceName{this, "GeoSvcName", "GeoSvc", "The name of the GeoSvc instance"}; // what is this for?
-
   Gaudi::Property<std::string> m_encodingStringVariable{this, "EncodingStringParameterName", "GlobalTrackerReadoutID", "The name of the DD4hep constant that contains the Encoding string for tracking detectors"};
-
+  
+  
+  Gaudi::Property<bool> m_cutDistanceToSurface{this, "CutDistanceToSurface", false, "Whether to cut simHits where the simHitPosition is not exactly on the DD4hep sensor simSurface."};
+  Gaudi::Property<bool> m_cutPathOutsideSensor{this, "CutPathOutsideSensor", false, "Whether to cut simHits where the simHitPath is not on or inside the sensor."};
+  Gaudi::Property<float> m_cutDepositedEnergy{this, "CutDepositedEnergy", 0.0, "Minimum energy (GeV) of SimTrackerHit to be digitized"};
+  
   
   // Sensor pitch and size (enter either a single value for all layers or a vector, containing one value per layer)
   Gaudi::Property<std::vector<double>> m_pixelPitch_u{this, "PixelPitch_u", {0.025}, "Pixel pitch in direction of u in mm; either one per layer or one for all layers"};
   Gaudi::Property<std::vector<double>> m_pixelPitch_v{this, "PixelPitch_v", {0.025}, "Pixel pitch in direction of v in mm; either one per layer or one for all layers"};
-  
   Gaudi::Property<std::vector<int>> m_pixelCount_u{this, "PixelCount_u", {1024}, "Number of pixels in direction of u; either one per layer or one for all layers"};
   Gaudi::Property<std::vector<int>> m_pixelCount_v{this, "PixelCount_v", {1024}, "Number of pixels in direction of v; either one per layer or one for all layers"};
-  
   Gaudi::Property<std::vector<double>> m_sensorThickness{this, "SensorThickness", {0.05}, "Sensor thickness in mm; either one per layer or one for all layers"};
-  
-  
   
   Gaudi::Property<int> m_layerCount{this, "LayerCount", 5, "Number of layers in the subdetector. Used to validate the size of the pixel pitch and count vectors."};
   Gaudi::Property<std::vector<int>> m_layersToDigitize{this, "LayersToDigitize", {}, "Which layers to digitize (0-indexed). If empty, all layers are digitized."};
 
+  Gaudi::Property<float> m_targetPathSegmentLength{this, "TargetPathSegmentLength", 0.002, "Length of the path segments, that the simHits path through a sensor is divided into. In mm. Defines the precision of the charge deposition along the path."};
+  Gaudi::Property<float> m_pathLengthShorteningFactorGeant4{this, "PathLengthShorteningFactorGeant4", 1.05, "Relative path length (to Geant4 path length), above which the path is shortened to the Geant4 length. (Geant4 length includes multiple scattering and curling in B-field, which are lost in our linear approximation of the path)."};
+  
   Gaudi::Property<int> m_kernelSize{this, "KernelSize", 3, "Size of the charge spreading kernel imported from Allpix2 (ie. 3 for 3x3 kernel) Must be an odd integer >= 3."};
-  Gaudi::Property<float> m_threshold{this, "Threshold", 0.6, "Threshold in keV for a pixel to fire (1 keV = 274 eh-pairs)"};
+  Gaudi::Property<float> m_pixelThreshold{this, "PixelThreshold", 0.6, "Threshold in keV for a pixel to fire (1 keV = 274 eh-pairs)"};
 
   Gaudi::Property<int> m_inPixelBinCount_u{this, "InPixelBinCount_u", 3, "Number of bins per pixel in u direction for charge deposition. Must agree with the imported Kernel map."};
   Gaudi::Property<int> m_inPixelBinCount_v{this, "InPixelBinCount_v", 3, "Number of bins per pixel in v direction for charge deposition. Must agree with the imported Kernel map."};
@@ -164,7 +169,10 @@ private:
   Gaudi::Property<std::string> m_localNormalVectorDir{this, "LocalNormalVectorDir", "", "Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). If defined correctly, the local frame is transformed such that z is orthogonal to the sensor plane."};
 
   Gaudi::Property<bool> m_useGlobalKernel{this, "UseGlobalKernel", true, "Whether to use a single global kernel for all layers (true), or a layer-dependent kernel (false). If true, a kernel needs to be supplied via the GlobalKernel property."};
-  Gaudi::Property<std::vector<double>> m_globalKernel{this, "GlobalKernel", {}, "Flat vector containing the global charge sharing kernel in row-major order (ie. row-by-row). Length must be KernelSize*KernelSize. Only used if UseGlobalKernel is true."};
+  Gaudi::Property<std::vector<float>> m_globalKernel{this, "GlobalKernel", {}, "Flat vector containing the global charge sharing kernel in row-major order (ie. row-by-row). Length must be KernelSize*KernelSize. Only used if UseGlobalKernel is true."};
+
+  Gaudi::Property<std::string> m_debugCsvName{this, "DebugCsvName", "", "Name of a CSV file to output detailed per-hit debug information. If empty, no debug output is created."};
+
 
   // -- Services --
   
@@ -177,10 +185,19 @@ private:
 
   // -- Global variables --
 
-  
-  std::unordered_map<int, int> m_layerToIndex; // layer number (from cellID / m_layersToDigitize) to internal index (0...N-1, where N is the number of layers to digitize)
+  mutable long int m_eventNumber; // current event number
 
-  const dd4hep::rec::SurfaceMap* m_surfaceMap;
+  const float m_numericLimit_float = 0.00001f; // limit for floating point comparisons
+  const double m_numericLimit_double = 0.000000001d; // limit for floating point
+
+  const float m_chargesPerkeV = 274.0f; // number of electron-hole pairs created per keV of deposited energy in silicon
+  
+  std::unordered_map<int, int> m_layerToIndex; // layer number (from cellID & m_layersToDigitize) to internal index (0...N-1, where N is the number of layers to digitize)
+
+  mutable bool m_debugFlag; // per-hit debug flag, set to true to add hit to debug histograms
+  mutable std::ofstream m_debugCsvFile; // debug output file
+
+  const dd4hep::rec::SurfaceMap* m_simSurfaceMap;
 
   enum { 
     counter_eventsRead, 
@@ -190,7 +207,8 @@ private:
     counter_simHitsRejected_LayerNotToBeDigitized, 
     counter_simHitsRejected_EnergyCut, 
     counter_simHitsRejected_SurfaceDistToLarge, 
-    counter_simHitsRejected_OutsideSensor, 
+    counter_simHitsRejected_OutsideSensor,
+    counter_simHitsRejected_NoSegmentsInSensor,
     counter_simHitsAccepted, 
     counter_digiHitsCreated, 
     counterArrayLen }; // counter indices.
@@ -206,7 +224,8 @@ private:
     hist_DisplacementU, 
     hist_DisplacementV, 
     hist_DisplacementR, 
-    hist_trackLength, 
+    hist_pathLength, 
+    hist_pathLengthGeant4,
     hist_HitEnergyDifference, 
     histArrayLen}; // histogram indices. histArrayLen must be last
   std::array<std::unique_ptr<Gaudi::Accumulators::StaticRootHistogram<1>>, histArrayLen> m_histograms; 
@@ -216,6 +235,7 @@ enum {
   hist2d_hitMap_digiHits, 
   hist2d_hitMap_simHitDebug, 
   hist2d_hitMap_digiHitDebug, 
+  hist2d_pathLength_vs_simHit_v,
   hist2dArrayLen }; // 2D histogram indices. hist2dArrayLen must be last
   std::vector<std::array<std::unique_ptr<Gaudi::Accumulators::StaticRootHistogram<2>>, hist2dArrayLen>> m_histograms2d;
 
@@ -230,19 +250,28 @@ enum {
 
       m_kernels.resize(binCountU * binCountV * binCountW);
       for (auto& kernel : m_kernels) {
-        kernel.resize(kernelSize*kernelSize, 0.);
+        kernel.resize(kernelSize*kernelSize, 0.f);
       }
     }
 
     /** Set the charge sharing kernel for a specific in-pixel bin 
-     * @param values A flat vector containing the kernel values in row-major order (ie. row-by-row) (length must be kernelSize*kernelSize)
+     * @param weights A flat vector containing the kernel values in row-major order (ie. row-by-row) (length must be kernelSize*kernelSize)
      */
-    void SetKernel(const int j_u, const int j_v, const int j_w, const std::vector<double>& values) {
-      if (static_cast<int>(values.size()) != m_kernelSize*m_kernelSize)
-        throw std::runtime_error("ChargeSharingKernel::SetKernel: values size (" + std::to_string(values.size()) + ") does not match kernel size (" + std::to_string(m_kernelSize*m_kernelSize) + ")");
+    void SetKernel(const int j_u, const int j_v, const int j_w, const std::vector<float>& weights) {
+      if (static_cast<int>(weights.size()) != m_kernelSize*m_kernelSize)
+        throw std::runtime_error("ChargeSharingKernel::SetKernel: weights size (" + std::to_string(weights.size()) + ") does not match kernel size (" + std::to_string(m_kernelSize*m_kernelSize) + ")");
+
+      // check if Kernel is normalized to 1
+      float sum = 0.f;
+      for (int row = 0; row < m_kernelSize; ++row) {
+        for (int col = 0; col < m_kernelSize; ++col) {
+          sum += weights.at(row*m_kernelSize + col);
+        }
+      }
+      if (std::abs(sum) > 1.000001f)
+        throw GaudiException("Supplied ChargeSharingKernel weight sum needs to be <= 1, but is " + std::to_string(sum) + ", .", "VTXdigi_Allpix2::ChargeSharingKernels::SetKernel()", StatusCode::FAILURE);
 
       const int index = _index(j_u, j_v, j_w);
-      // std::vector<double>& kernel = m_kernels.at(index);
 
       for (int row = 0; row < m_kernelSize; ++row) {
         for (int col = 0; col < m_kernelSize; ++col) {
@@ -252,7 +281,7 @@ enum {
     }
 
     /** Access kernel as const reference */
-    const std::vector<double>& GetKernel(int j_u, int j_v, int j_w) const {
+    const std::vector<float>& GetKernel(int j_u, int j_v, int j_w) const {
       if (j_u < 0 || j_u >= m_binCountU)
         throw std::runtime_error("ChargeSharingKernel::GetKernel: j_u (= " + std::to_string(j_u) + ") out of range");
       if (j_v < 0 || j_v >= m_binCountV)
@@ -266,7 +295,7 @@ enum {
      * @param j_u, j_v, j_w In-pixel indices
      * @param j_col, j_row Column and row of the kernel entry to access (go from -(kernelsize-1)/2 to +(kernelsize-1)/2)
     */
-    double GetKernelEntry(int j_u, int j_v, int j_w, int j_col, int j_row) const {
+    float GetWeight(int j_u, int j_v, int j_w, int j_col, int j_row) const {
       if (abs(j_col) > (m_kernelSize-1)/2)
         throw std::runtime_error("GetKernelEntry: j_col (=" + std::to_string(j_col) + ") out of range");
       if (abs(j_row) > (m_kernelSize-1)/2)
@@ -275,12 +304,25 @@ enum {
       return kernel[(j_col + (m_kernelSize-1)/2) * m_kernelSize + (j_row + (m_kernelSize-1)/2)];
     }
 
+    inline int GetSize() const {
+      return m_kernelSize;
+    }
+    inline int GetBinCountU() const {
+      return m_binCountU;
+    }
+    inline int GetBinCountV() const {
+      return m_binCountV;
+    }
+    inline int GetBinCountW() const {
+      return m_binCountW;
+    }
+
   private:
     int m_binCountU, m_binCountV, m_binCountW;
     int m_kernelSize;
     /** Vector of kernels, one per in-pixel bin
      *  Kernel-indexing is col-major (ie. i = col * size + row) */
-    std::vector<std::vector<double>> m_kernels; 
+    std::vector<std::vector<float>> m_kernels; 
 
     int _index (int j_u, int j_v, int j_w) const {
       if (j_u < 0 || j_u >= m_binCountU)
