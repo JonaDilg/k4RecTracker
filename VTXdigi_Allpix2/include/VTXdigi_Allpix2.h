@@ -7,6 +7,7 @@
 #include "Gaudi/Property.h"
 
 #include "Gaudi/Accumulators/RootHistogram.h" // added by Jona
+#include "Gaudi/Accumulators/Histogram.h" // added by Jona
 
 // EDM4HEP
 #include "edm4hep/SimTrackerHitCollection.h"
@@ -124,11 +125,11 @@ struct VTXdigi_Allpix2 final
   void InitialSensorSizeCheck(const edm4hep::SimTrackerHit& simHit) const;
     
   /** Apply cuts to a simHit. Returns true if the hit is accepted, false if dismissed. */
-  bool ApplySimHitCuts(const dd4hep::rec::ISurface& simSurface, const int layerIndex, const float eDeposition, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const dd4hep::rec::Vector3D& simHitGlobalPos) const;
+  bool ApplySimHitCuts(const dd4hep::rec::ISurface& simSurface, const int layerIndex, const float simHitCharge, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const dd4hep::rec::Vector3D& simHitGlobalPos) const;
   
   /** Create a digitized hit */
-  void CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const float eDeposition, const dd4hep::rec::Vector3D& position) const;
-  void CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const float eDeposition, const edm4hep::Vector3d& position) const;
+  void CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const float simHitCharge, const dd4hep::rec::Vector3D& position) const;
+  void CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const float simHitCharge, const edm4hep::Vector3d& position) const;
   /** Write simHit position & path information to a CSV file */
   void WriteSimHitToCsv(const edm4hep::SimTrackerHit& simHit, const dd4hep::rec::Vector3D& simHitPos, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const int segmentNumber, const int layerIndex, const int i_u, const int i_v) const;
   
@@ -142,7 +143,7 @@ struct VTXdigi_Allpix2 final
   
   Gaudi::Property<bool> m_cutDistanceToSurface{this, "CutDistanceToSurface", false, "Whether to cut simHits where the simHitPosition is not exactly on the DD4hep sensor simSurface."};
   Gaudi::Property<bool> m_cutPathOutsideSensor{this, "CutPathOutsideSensor", false, "Whether to cut simHits where the simHitPath is not on or inside the sensor."};
-  Gaudi::Property<float> m_cutDepositedEnergy{this, "CutDepositedEnergy", 0.0, "Minimum energy (GeV) of SimTrackerHit to be digitized"};
+  Gaudi::Property<float> m_cutDepositedCharge{this, "CutDepositedCharge", 0.0, "Minimum charge (e-) of SimTrackerHit to be digitized"};
   
   
   // Sensor pitch and size (enter either a single value for all layers or a vector, containing one value per layer)
@@ -155,11 +156,13 @@ struct VTXdigi_Allpix2 final
   Gaudi::Property<int> m_layerCount{this, "LayerCount", 5, "Number of layers in the subdetector. Used to validate the size of the pixel pitch and count vectors."};
   Gaudi::Property<std::vector<int>> m_layersToDigitize{this, "LayersToDigitize", {}, "Which layers to digitize (0-indexed). If empty, all layers are digitized."};
 
+  Gaudi::Property<std::vector<int>> m_maxClusterSize{this, "MaximumClusterSize", {15,15}, "Maximum cluster size [max in u, max in v] in terms of pixels. Charges in pixels further that 1/2 max from the simHit pixel are discarded. This greatly improves performance. "};
+
   Gaudi::Property<float> m_targetPathSegmentLength{this, "TargetPathSegmentLength", 0.002, "Length of the path segments, that the simHits path through a sensor is divided into. In mm. Defines the precision of the charge deposition along the path."};
   Gaudi::Property<float> m_pathLengthShorteningFactorGeant4{this, "PathLengthShorteningFactorGeant4", 1.05, "Relative path length (to Geant4 path length), above which the path is shortened to the Geant4 length. (Geant4 length includes multiple scattering and curling in B-field, which are lost in our linear approximation of the path)."};
   
   Gaudi::Property<int> m_kernelSize{this, "KernelSize", 3, "Size of the charge spreading kernel imported from Allpix2 (ie. 3 for 3x3 kernel) Must be an odd integer >= 3."};
-  Gaudi::Property<float> m_pixelThreshold{this, "PixelThreshold", 0.6, "Threshold in keV for a pixel to fire (1 keV = 274 eh-pairs)"};
+  Gaudi::Property<float> m_pixelThreshold{this, "PixelThreshold", 100, "Threshold in electrons for a pixel to fire (1 eh-pair = 3.65 eV)"};
 
   Gaudi::Property<int> m_inPixelBinCount_u{this, "InPixelBinCount_u", 3, "Number of bins per pixel in u direction for charge deposition. Must agree with the imported Kernel map."};
   Gaudi::Property<int> m_inPixelBinCount_v{this, "InPixelBinCount_v", 3, "Number of bins per pixel in v direction for charge deposition. Must agree with the imported Kernel map."};
@@ -168,8 +171,7 @@ struct VTXdigi_Allpix2 final
   // Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). Defaults to no transformation.
   Gaudi::Property<std::string> m_localNormalVectorDir{this, "LocalNormalVectorDir", "", "Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). If defined correctly, the local frame is transformed such that z is orthogonal to the sensor plane."};
 
-  Gaudi::Property<bool> m_useGlobalKernel{this, "UseGlobalKernel", true, "Whether to use a single global kernel for all layers (true), or a layer-dependent kernel (false). If true, a kernel needs to be supplied via the GlobalKernel property."};
-  Gaudi::Property<std::vector<float>> m_globalKernel{this, "GlobalKernel", {}, "Flat vector containing the global charge sharing kernel in row-major order (ie. row-by-row). Length must be KernelSize*KernelSize. Only used if UseGlobalKernel is true."};
+  Gaudi::Property<std::vector<float>> m_globalKernel{this, "GlobalKernel", {}, "Flat vector containing the global charge sharing kernel in row-major order (ie. row-by-row), starting on top left. Length must be KernelSize*KernelSize"};
 
   Gaudi::Property<std::string> m_debugCsvName{this, "DebugCsvName", "", "Name of a CSV file to output detailed per-hit debug information. If empty, no debug output is created."};
 
@@ -188,9 +190,9 @@ struct VTXdigi_Allpix2 final
   mutable long int m_eventNumber; // current event number
 
   const float m_numericLimit_float = 0.00001f; // limit for floating point comparisons
-  const double m_numericLimit_double = 0.000000001d; // limit for floating point
+  const double m_numericLimit_double = 0.000000001; // limit for floating point
 
-  const float m_chargesPerkeV = 274.0f; // number of electron-hole pairs created per keV of deposited energy in silicon
+  const float m_chargePerkeV = 273.97f; // number of electron-hole pairs created per keV of deposited energy in silicon. eh-pair ~ 3.65 eV
   
   std::unordered_map<int, int> m_layerToIndex; // layer number (from cellID & m_layersToDigitize) to internal index (0...N-1, where N is the number of layers to digitize)
 
@@ -205,7 +207,7 @@ struct VTXdigi_Allpix2 final
     counter_eventsAccepted, 
     counter_simHitsRead, 
     counter_simHitsRejected_LayerNotToBeDigitized, 
-    counter_simHitsRejected_EnergyCut, 
+    counter_simHitsRejected_ChargeCut, 
     counter_simHitsRejected_SurfaceDistToLarge, 
     counter_simHitsRejected_OutsideSensor,
     counter_simHitsRejected_NoSegmentsInSensor,
@@ -217,6 +219,7 @@ struct VTXdigi_Allpix2 final
 
   enum { 
     hist_hitE, 
+    hist_hitCharge,
     hist_clusterSize, 
     hist_EntryPointX, 
     hist_EntryPointY, 
@@ -226,7 +229,7 @@ struct VTXdigi_Allpix2 final
     hist_DisplacementR, 
     hist_pathLength, 
     hist_pathLengthGeant4,
-    hist_HitEnergyDifference, 
+    hist_HitChargeDifference, 
     histArrayLen}; // histogram indices. histArrayLen must be last
   std::array<std::unique_ptr<Gaudi::Accumulators::StaticRootHistogram<1>>, histArrayLen> m_histograms; 
 
@@ -241,6 +244,79 @@ enum {
 
 
   mutable std::unordered_set<int> m_initialSensorSizeCheckPassed; // whether the check that the pixel pitch and count match the sensor size in the geometry has been done and passed
+
+  enum {
+    histWeighted2d_averageCluster,
+    histWeighted2dArrayLen };
+  std::vector<std::array<std::unique_ptr<Gaudi::Accumulators::StaticWeightedHistogram<2, Gaudi::Accumulators::atomicity::full, double>>, histWeighted2dArrayLen>> m_histWeighted2d;
+
+
+
+  struct PixelChargeMatrix {
+    /* Stores the charge deposited in a (size_u x size_v) pixel matrix around a given center pixel. Charges outside the matrix are discarded.
+     * The size of the matrix is defined via the Gaudi property MaximumClusterSize.
+    */
+    PixelChargeMatrix(int i_u_center, int i_v_center, int size_u, int size_v) 
+      : m_size_u(size_u), m_size_v(size_v), m_i_u_center(i_u_center), m_i_v_center(i_v_center) {
+      m_pixelCharge.resize(size_u * size_v, 0.f);
+    }
+    
+    inline int GetCenterU() const { return m_i_u_center; }
+    inline int GetCenterV() const { return m_i_v_center; }
+    inline int GetSizeU() const { return m_size_u; }
+    inline int GetSizeV() const { return m_size_v; }
+
+    inline std::tuple<int, int> GetSize() const {
+      return std::make_tuple(m_size_u, m_size_v);
+    }
+    inline std::tuple<int, int> GetCenter() const {
+      return std::make_tuple(m_i_u_center, m_i_v_center);
+    }
+    
+    float GetCharge(int i_u, int i_v) const {
+      if ( // factor 2 to avoid divisions
+        2*i_u < 2*m_i_u_center - (m_size_u-1) 
+        || 2*i_u > 2*m_i_u_center + (m_size_u-1)
+        || 2*i_v < 2*m_i_v_center - (m_size_v-1)
+        || 2*i_v > 2*m_i_v_center + (m_size_v-1)) {
+        throw std::runtime_error("PixelChargeMatrix::GetCharge: pixel i_u or i_v ( " + std::to_string(i_u) + ", " + std::to_string(i_v) + ") out of range");
+      }
+      return m_pixelCharge[_index(i_u, i_v)];
+    }
+    
+    float TotalCharge() const {
+      return std::accumulate(m_pixelCharge.begin(), m_pixelCharge.end(), 0.f);
+    }
+
+    bool AddCharge(int i_u, int i_v, float charge) {
+      if ( // factor 2 to avoid divisions
+        2*i_u < 2*m_i_u_center - (m_size_u-1) 
+        || 2*i_u > 2*m_i_u_center + (m_size_u-1)
+        || 2*i_v < 2*m_i_v_center - (m_size_v-1)
+        || 2*i_v > 2*m_i_v_center + (m_size_v-1)) {
+        // handle out of bounds gracefully, this might occur due to noise etc.
+        return false; // indicate failure
+      }
+      m_pixelCharge[_index(i_u, i_v)] += charge;
+      return true; // indicate success
+    }
+    // TODO: resize array if out of bounds (instead of simply discarding the charge)? This would be slow, but more robust. Is probably acceptable if it only occurs rarely, ie. the size_u and size_v are large enough for >99% of cases. ~ Jona 2025-10
+
+    void Reset() {
+      std::fill(m_pixelCharge.begin(), m_pixelCharge.end(), 0.f);
+    }
+
+  private:
+    int m_size_u, m_size_v;
+    int m_i_u_center, m_i_v_center;
+    std::vector<float> m_pixelCharge;
+
+    int _index(int i_u, int i_v) const {
+      int i_u_rel = i_u - m_i_u_center + (m_size_u-1) / 2;
+      int i_v_rel = i_v - m_i_v_center + (m_size_v-1) / 2;
+      return i_u_rel + i_v_rel * m_size_u;
+    }
+  };
 
   // class to store the charge sharing kernel for each in-pixel bin
   struct ChargeSharingKernels {
@@ -275,7 +351,10 @@ enum {
 
       for (int row = 0; row < m_kernelSize; ++row) {
         for (int col = 0; col < m_kernelSize; ++col) {
-          m_kernels.at(index).at(col * m_kernelSize + row) = values.at(row*m_kernelSize + col);
+          // weights are given in row-major order, starting at top left. 
+          // We store kernels in col-major order, starting at bottom left (lowest bin index)
+          // m_kernels.at(index).at(col * m_kernelSize + row) = weights.at(row*m_kernelSize + col);
+          m_kernels.at(index).at(col * m_kernelSize + row) = weights.at((m_kernelSize-1-row)*m_kernelSize + col);
         }
       }
     }
