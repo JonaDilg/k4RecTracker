@@ -74,11 +74,13 @@ struct VTXdigi_Allpix2 final
 
   std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> operator() (const edm4hep::SimTrackerHitCollection& simHits, const edm4hep::EventHeaderCollection& headers) const override;
 
+private:
+
   // -- Transformation between global frame and local sensor frame
 
   /** Get the transformation matrix to the local sensor frame */
-  TGeoHMatrix GetTransformationMatrix(const edm4hep::SimTrackerHit& simHit) const;
-  TGeoHMatrix GetTransformationMatrix(const dd4hep::DDSegmentation::CellID& cellID) const;
+  TGeoHMatrix FindTransformationMatrix(const edm4hep::SimTrackerHit& simHit) const;
+  TGeoHMatrix FindTransformationMatrix(const dd4hep::DDSegmentation::CellID& cellID) const;
 
   /** adjust the transformation matrix to the local sensor frame, so that it is x-u, y-v, z-n and right-handed. Uses user-input "LocalNormalVectorDir" */
   void SetProperDirectFrame(TGeoHMatrix& sensorTransformMatrix) const;
@@ -98,28 +100,29 @@ struct VTXdigi_Allpix2 final
 
   
   /** Calculate the entry point and path vector of a simHit in local sensor frame. */
-  std::tuple<dd4hep::rec::Vector3D, dd4hep::rec::Vector3D> GetSimHitPath(const edm4hep::SimTrackerHit& simHit, const int layerIndex, const float length_u, const float length_v) const;
+  std::tuple<dd4hep::rec::Vector3D, dd4hep::rec::Vector3D> FindSimHitPath(const edm4hep::SimTrackerHit& simHit, const int layerIndex, const float length_u, const float length_v) const;
+
+  /** Calculate the clipping factors for the path of a simHit in local sensor frame. Used in FindSimHitPath() */
+  std::tuple<float, float> FindPathClippingFactors(float t_min, float t_max, const float entryPos_ax, const float pathLength_ax, const float sensorLength_ax) const;
   
   /**Given a histogram definition (x0, binWidth, nBins) and a value x, return the bin index in which x falls.
    * Returns -1 if x is out of range.
    * Bins are 0-indexed (vs ROOT's 1-indexing) */
-  int GetBinIndex(float x, float binX0, float binWidth, int binN) const;
+  int FindBinIndex(float x, float binX0, float binWidth, int binN) const;
 
   /** Get the pixel indices (i_u, i_v) for a given position inside the sensor */
-  std::tuple<int, int> GetPixelIndices(const dd4hep::rec::Vector3D& pos, const int layerIndex, const float length_u, const float length_v) const;
+  std::tuple<int, int> FindPixelIndices(const dd4hep::rec::Vector3D& pos, const int layerIndex, const float length_u, const float length_v) const;
   
   /** Get the in-pixel indices (j_u, j_v, j_w) for a given position inside the pixel and layer index
    *  Assumption: each layer has only 1 type if sensor */
-  std::tuple<int, int, int> GetInPixelIndices(const dd4hep::rec::Vector3D& pos, const int layerIndex, const float length_u, const float length_v) const;
+  std::tuple<int, int, int> FindInPixelIndices(const dd4hep::rec::Vector3D& pos, const int layerIndex, const float length_u, const float length_v) const;
 
   /** Get the local position of a pixel center (u,v,0) */
-  dd4hep::rec::Vector3D GetPixelCenter_Local(const int i_u, const int i_v, const int layerIndex, const dd4hep::rec::ISurface& simSurface) const;
+  dd4hep::rec::Vector3D FindPixelCenter_Local(const int i_u, const int i_v, const int layerIndex, const dd4hep::rec::ISurface& simSurface) const;
   
-  std::tuple<int, int, int, int, int> ProcessSegment(const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const int n, const int segmentNumber, const int layerIndex, const float length_u, const float length_v) const;
+  std::tuple<int, int, int, int, int> FindSegmentIndices(const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const int n, const int segmentNumber, const int layerIndex, const float length_u, const float length_v) const;
 
   
-  
-  private:
   /** Check that the pixel pitch and count match the sensor size in the geometry
    */
   void InitialSensorSizeCheck(const edm4hep::SimTrackerHit& simHit) const;
