@@ -171,9 +171,9 @@ StatusCode VTXdigi_Allpix2::initialize() {
   // -- Debugging Histograms --
 
   m_histograms.at(hist_hitE).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "hitE", "SimHit Energy;keV", {1000, 0, 200}});
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "hitE", "SimHit Energy;keV", {1000, 0, m_sensorThickness.value().at(0)*2000}}); 
   m_histograms.at(hist_hitCharge).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "hitCharge", "SimHit Charge;electrons", {1000, 0, 5000}});
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "hitCharge", "SimHit Charge;electrons", {1000, 0, m_sensorThickness.value().at(0)*500000}});
   m_histograms.at(hist_clusterSize).reset(
     new Gaudi::Accumulators::StaticRootHistogram<1>{this, "ClusterSize", "Cluster Size\n(ie. number of digiHits per accepted simHit)", {20, -0.5, 19.5}});
 
@@ -211,7 +211,7 @@ StatusCode VTXdigi_Allpix2::initialize() {
     m_histograms2d.at(layerIndex).at(hist2d_hitMap_simHits).reset(
       new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
         "Layer"+std::to_string(layer)+"_HitMap_simHits",
-        "SimHit Hitmap, Layer " + std::to_string(layer) + " (Local);u [pix]; v [pix]",
+        "SimHit Hitmap, Layer " + std::to_string(layer) + ";u [pix]; v [pix]",
         {static_cast<unsigned int>(m_pixelCount_u.value().at(0)), -0.5, static_cast<double>(m_pixelCount_u.value().at(0)+0.5)},
         {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)}
       }
@@ -219,7 +219,7 @@ StatusCode VTXdigi_Allpix2::initialize() {
     m_histograms2d.at(layerIndex).at(hist2d_hitMap_digiHits).reset(
       new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
         "Layer"+std::to_string(layer)+"_HitMap_digiHits",
-        "DigiHit Hitmap, Layer " + std::to_string(layer) + " (Local);u [pix]; v [pix]",
+        "DigiHit Hitmap, Layer " + std::to_string(layer) + ";u [pix]; v [pix]",
         {static_cast<unsigned int>(m_pixelCount_u.value().at(0)), -0.5, static_cast<double>(m_pixelCount_u.value().at(0)+0.5)},
         {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)}
       }
@@ -227,7 +227,7 @@ StatusCode VTXdigi_Allpix2::initialize() {
     m_histograms2d.at(layerIndex).at(hist2d_hitMap_simHitDebug).reset(
       new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
         "Layer"+std::to_string(layer)+"_HitMap_simHitsDebug",
-        "SimHit Debugging Hitmap, Layer " + std::to_string(layer) + " (Local) \n showing hits where local w != -25 um;u [pix]; v [pix]",
+        "SimHit Debugging Hitmap, Layer " + std::to_string(layer) + " showing hits where local w != -25 um;u [pix]; v [pix]",
         {static_cast<unsigned int>(m_pixelCount_u.value().at(0)), -0.5, static_cast<double>(m_pixelCount_u.value().at(0)+0.5)},
         {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)}
       }
@@ -235,7 +235,7 @@ StatusCode VTXdigi_Allpix2::initialize() {
     m_histograms2d.at(layerIndex).at(hist2d_hitMap_digiHitDebug).reset(
       new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
         "Layer"+std::to_string(layer)+"_HitMap_digiHitsDebug",
-        "DigiHit Debugging Hitmap, Layer " + std::to_string(layer) + " (Local)\n showing hits where local w != -25 um;u [pix]; v [pix]",
+        "DigiHit Debugging Hitmap, Layer " + std::to_string(layer) + " showing hits where local w != -25 um;u [pix]; v [pix]",
         {static_cast<unsigned int>(m_pixelCount_u.value().at(0)), -0.5, static_cast<double>(m_pixelCount_u.value().at(0)+0.5)},
         {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)}
       }
@@ -243,9 +243,10 @@ StatusCode VTXdigi_Allpix2::initialize() {
     m_histograms2d.at(layerIndex).at(hist2d_pathLength_vs_simHit_v).reset(
       new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
         "Layer"+std::to_string(layer)+"_TrackLength_vs_simHit_v",
-        "Track Length in Sensor Active Volume vs. SimHit v position (local), Layer " + std::to_string(layer) + ";Track Length [um]; simHit v [pix]",
+        "Track Length in Sensor Active Volume vs. SimHit v position (local), Layer " + std::to_string(layer) + ";simHit v [pix];Track Length [um]",
+          {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)},
         {200, 0., 10*m_sensorThickness.value().at(layerIndex)*1000}, // in um
-        {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)}
+      
       }
     );
 
@@ -471,15 +472,11 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
             try {
               const float kernelEntry = m_chargeSharingKernels->GetWeight(j_u, j_v, j_w, i_m, i_n);
               if (kernelEntry < m_numericLimit_float) continue; // skip zero entries
-              bool chargeAdded = pixelChargeMatrix.AddCharge(
+              pixelChargeMatrix.FillCharge(
                 i_u_target, i_v_target,
                 kernelEntry * nSegmentsInBin * segmentCharge);
-              if (!chargeAdded) {
-                // this means the target pixel is out of bounds of the pixelChargeMatrix
-                warning() << "Pixel i_u or i_v (" << i_u_target << ", " << i_v_target << ") out of range from simHit at (" << i_u_simHit << ", " <<  i_v_simHit << "). Charge " << kernelEntry * nSegmentsInBin * segmentCharge << " discarded. (Increase property MaxClusterSize if this occurs regularly) " << endmsg;
-                }
             } catch (const std::exception& e) {
-              warning() << "Exception while accessing kernel entry and saving charge for in-pixel bin (" << j_u << "," << j_v << "," << j_w << "): " << e.what() << ". Skipping this bin." << endmsg;
+              warning() << "Exception while accessing kernel entry and saving charge for pixel (" << i_u_target << "," << i_v_target << "), in pix bin(" << j_u << "," << j_v << "," << j_w << "): " << e.what() << ". Skipping this bin." << endmsg;
               continue;
             }
           }
@@ -501,9 +498,9 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
 
     // const auto& [i_u_simHit, i_v_simHit] = FindPixelIndices(simHitLocalPos, layerIndex, length_u, length_v);
 
-    for (i_u = i_u_simHit - (pixelChargeMatrix.GetSizeU()-1)/2; i_u <= i_u_simHit + (pixelChargeMatrix.GetSizeU()-1)/2; ++i_u) {
+    for (i_u = pixelChargeMatrix.GetRangeMin_u(); i_u <= pixelChargeMatrix.GetRangeMax_u(); ++i_u) {
 
-      for (i_v = i_v_simHit - (pixelChargeMatrix.GetSizeV()-1)/2; i_v <= i_v_simHit + (pixelChargeMatrix.GetSizeV()-1)/2; ++i_v) {
+      for (i_v = pixelChargeMatrix.GetRangeMin_v(); i_v <= pixelChargeMatrix.GetRangeMax_v(); ++i_v) {
 
         float pixelCharge = pixelChargeMatrix.GetCharge(i_u, i_v);
         if (pixelCharge > m_numericLimit_float) {
@@ -550,7 +547,7 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
     std::tie(pix_u, pix_v) = FindPixelIndices(simHitLocalPos, layerIndex, length_u, length_v);
     verbose() << "   - Filling 2D histograms for layer " << m_cellIDdecoder->get(cellID, "layer") << " (index " << layerIndex << ")" << endmsg;
     ++(*m_histograms2d.at(layerIndex).at(hist2d_hitMap_simHits))[{pix_u, pix_v}]; // in mm
-    ++(*m_histograms2d.at(layerIndex).at(hist2d_pathLength_vs_simHit_v))[{simHitPath.r()*1000, pix_v}]; // in um and mm
+    ++(*m_histograms2d.at(layerIndex).at(hist2d_pathLength_vs_simHit_v))[{pix_v, simHitPath.r()*1000}]; // in um and mm
 
     if (m_debugFlag) { 
       ++(*m_histograms2d.at(layerIndex).at(hist2d_hitMap_simHitDebug))[{pix_u, pix_v}];

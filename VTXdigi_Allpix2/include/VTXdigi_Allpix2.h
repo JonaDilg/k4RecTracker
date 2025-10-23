@@ -203,7 +203,7 @@ private:
   mutable std::ofstream m_debugCsvFile; // debug output file
 
   const dd4hep::rec::SurfaceMap* m_simSurfaceMap;
-
+  
   enum { 
     counter_eventsRead, 
     counter_eventsRejected_noSimHits, 
@@ -253,55 +253,60 @@ enum {
     histWeighted2dArrayLen };
   std::vector<std::array<std::unique_ptr<Gaudi::Accumulators::StaticWeightedHistogram<2, Gaudi::Accumulators::atomicity::full, double>>, histWeighted2dArrayLen>> m_histWeighted2d;
 
-
+  // -- Classes -- 
 
   struct PixelChargeMatrix {
-    /* Stores the charge deposited in a (size_u x size_v) pixel matrix around a given center pixel. Charges outside the matrix are discarded.
+    /* Stores the charge deposited in a (size_u x size_v) pixel matrix around a given origin pixel.
+     * In case charge is added outside the matrix bounds, the matrix range is expanded in that direction.
      * The size of the matrix is defined via the Gaudi property MaximumClusterSize.
     */
-    PixelChargeMatrix(int i_u_center, int i_v_center, int size_u, int size_v) 
-      : m_size_u(size_u), m_size_v(size_v), m_i_u_center(i_u_center), m_i_v_center(i_v_center) {
+    PixelChargeMatrix(int i_origin_u, int i_origin_v, int size_u, int size_v) 
+      : m_origin{ i_origin_u, i_origin_v } {
+        // At first, the range is centered around the origin
+      m_range_u[0] = m_origin[0] - (size_u - 1) / 2;
+      m_range_u[1] = m_origin[0] + (size_u - 1) / 2;
+      m_range_v[0] = m_origin[1] - (size_v - 1) / 2;
+      m_range_v[1] = m_origin[1] + (size_v - 1) / 2;
+
       m_pixelCharge.resize(size_u * size_v, 0.f);
     }
     
-    inline int GetCenterU() const { return m_i_u_center; }
-    inline int GetCenterV() const { return m_i_v_center; }
-    inline int GetSizeU() const { return m_size_u; }
-    inline int GetSizeV() const { return m_size_v; }
+    inline int GetOriginU() const { return m_origin[0]; }
+    inline int GetOriginV() const { return m_origin[1]; }
+    inline int GetRangeMin_u() const { return m_range_u[0]; }
+    inline int GetRangeMax_u() const { return m_range_u[1]; }
+    inline int GetRangeMin_v() const { return m_range_v[0]; }
+    inline int GetRangeMax_v() const { return m_range_v[1]; }
+    inline int GetSizeU() const { return m_range_u[1] - m_range_u[0] + 1; }
+    inline int GetSizeV() const { return m_range_v[1] - m_range_v[0] + 1; }
 
     inline std::tuple<int, int> GetSize() const {
-      return std::make_tuple(m_size_u, m_size_v);
+      return std::make_tuple(GetSizeU(), GetSizeV());
     }
-    inline std::tuple<int, int> GetCenter() const {
-      return std::make_tuple(m_i_u_center, m_i_v_center);
-    }
-    
-    float GetCharge(int i_u, int i_v) const {
-      if ( // factor 2 to avoid divisions
-        2*i_u < 2*m_i_u_center - (m_size_u-1) 
-        || 2*i_u > 2*m_i_u_center + (m_size_u-1)
-        || 2*i_v < 2*m_i_v_center - (m_size_v-1)
-        || 2*i_v > 2*m_i_v_center + (m_size_v-1)) {
-        throw std::runtime_error("PixelChargeMatrix::GetCharge: pixel i_u or i_v ( " + std::to_string(i_u) + ", " + std::to_string(i_v) + ") out of range");
-      }
-      return m_pixelCharge[_index(i_u, i_v)];
+    inline std::tuple<int, int> GetOrigin() const {
+      return std::make_tuple(m_origin[0], m_origin[1]);
     }
     
     float TotalCharge() const {
       return std::accumulate(m_pixelCharge.begin(), m_pixelCharge.end(), 0.f);
     }
 
-    bool AddCharge(int i_u, int i_v, float charge) {
-      if ( // factor 2 to avoid divisions
-        2*i_u < 2*m_i_u_center - (m_size_u-1) 
-        || 2*i_u > 2*m_i_u_center + (m_size_u-1)
-        || 2*i_v < 2*m_i_v_center - (m_size_v-1)
-        || 2*i_v > 2*m_i_v_center + (m_size_v-1)) {
-        // handle out of bounds gracefully, this might occur due to noise etc.
-        return false; // indicate failure
+    float GetCharge(int i_u, int i_v) const {
+      if (_OutOfBounds(i_u, i_v)) {
+        throw std::runtime_error("PixelChargeMatrix::GetCharge: pixel i_u or i_v ( " + std::to_string(i_u) + ", " + std::to_string(i_v) + ") out of range");
       }
-      m_pixelCharge[_index(i_u, i_v)] += charge;
-      return true; // indicate success
+      return m_pixelCharge[_FindIndex(i_u, i_v)];
+    }
+
+    void FillCharge(int i_u, int i_v, float charge) {
+      if (_OutOfBounds(i_u, i_v)) {
+        // this might occur due to the limited size of the matrix or delta-electrons. 
+        _ExpandMatrix(i_u, i_v);
+      }
+      if (_OutOfBounds(i_u, i_v)) {
+        throw std::runtime_error("PixelChargeMatrix::FillCharge: pixel i_u or i_v ( " + std::to_string(i_u) + ", " + std::to_string(i_v) + ") still out of range ( " + std::to_string(m_range_u[0]) + ", " + std::to_string(m_range_u[1]) + ", " + std::to_string(m_range_v[0]) + ", " + std::to_string(m_range_v[1]) + ") after expansion");
+      }
+      m_pixelCharge[_FindIndex(i_u, i_v)] += charge;
     }
     // TODO: resize array if out of bounds (instead of simply discarding the charge)? This would be slow, but more robust. Is probably acceptable if it only occurs rarely, ie. the size_u and size_v are large enough for >99% of cases. ~ Jona 2025-10
 
@@ -310,14 +315,67 @@ enum {
     }
 
   private:
-    int m_size_u, m_size_v;
-    int m_i_u_center, m_i_v_center;
+    const int m_minExpansionStep = 5; // number of pixels to expand the matrix by, if out of bounds occurs
+  
+    int m_range_u[2], m_range_v[2]; // Inclusive matrix range. -> size = range[1] - range[0] + 1
+    // CAN theoretically extend into negative values, this ensures graceful handling of hits outside inditial bounds. These might be discarded later, if outside of sensor.
+    int m_origin[2]; // origin pixel indices
     std::vector<float> m_pixelCharge;
 
-    int _index(int i_u, int i_v) const {
-      int i_u_rel = i_u - m_i_u_center + (m_size_u-1) / 2;
-      int i_v_rel = i_v - m_i_v_center + (m_size_v-1) / 2;
-      return i_u_rel + i_v_rel * m_size_u;
+    inline int _FindIndex(int i_u, int i_v) const {
+      int i_u_rel = i_u - m_range_u[0];
+      int i_v_rel = i_v - m_range_v[0];
+      return i_u_rel + i_v_rel * GetSizeU();
+    }
+
+    inline bool _OutOfBounds(int i_u, int i_v) const {
+      return (
+        i_u < m_range_u[0]
+        || i_u > m_range_u[1]
+        || i_v < m_range_v[0]
+        || i_v > m_range_v[1]);
+    }
+
+    void _ExpandMatrix(int i_u, int i_v) {
+      /* Expand the matrix to include (i_u, i_v) and an excess of m_expansionStep pixels.
+       */
+
+      int rangeNew_u[2] = { m_range_u[0], m_range_u[1] }; 
+      int rangeNew_v[2] = { m_range_v[0], m_range_v[1] };
+
+      // TODO: optimise the expansion logic below, to expand to two directions at once if hit is close to corner ~ Jona 2025-10
+
+      // expand in u direction?
+      if (i_u < m_range_u[0]) {
+        rangeNew_u[0] = i_u - m_minExpansionStep; // expand to include i_u plus some excess
+      } else if (i_u > m_range_u[1]) {
+        rangeNew_u[1] = i_u + m_minExpansionStep;
+      }
+      // expand in v direction?
+      if (i_v < m_range_v[0]) {
+        rangeNew_v[0] = i_v - m_minExpansionStep;
+      } else if (i_v > m_range_v[1]) {
+        rangeNew_v[1] = i_v + m_minExpansionStep;
+      }
+
+      const int newSizeU = rangeNew_u[1] - rangeNew_u[0] + 1;
+      const int newSizeV = rangeNew_v[1] - rangeNew_v[0] + 1;
+
+      std::vector<float> newPixelCharge(newSizeU * newSizeV, 0.f);
+
+      // copy old charges into new array, row by row
+      
+      for (int row = 0; row < GetSizeV(); ++row) {
+        std::copy(
+          m_pixelCharge.begin() + row * GetSizeU(),
+          m_pixelCharge.begin() + (row + 1) * GetSizeU(),
+          newPixelCharge.begin() + (row + (m_range_v[0] - rangeNew_v[0])) * newSizeU + (m_range_u[0] - rangeNew_u[0])
+        );
+      }
+
+      m_pixelCharge.swap(newPixelCharge);
+      std::copy(rangeNew_u, rangeNew_u + 2, m_range_u);
+      std::copy(rangeNew_v, rangeNew_v + 2, m_range_v);
     }
   };
 
@@ -350,7 +408,7 @@ enum {
       if (std::abs(sum) > 1.000001f)
         throw GaudiException("Supplied ChargeSharingKernel weight sum needs to be <= 1, but is " + std::to_string(sum) + ", .", "VTXdigi_Allpix2::ChargeSharingKernels::SetKernel()", StatusCode::FAILURE);
 
-      const int index = _index(j_u, j_v, j_w);
+      const int index = _FindIndex(j_u, j_v, j_w);
 
       for (int row = 0; row < m_kernelSize; ++row) {
         for (int col = 0; col < m_kernelSize; ++col) {
@@ -370,7 +428,7 @@ enum {
         throw std::runtime_error("ChargeSharingKernel::GetKernel: j_v (= " + std::to_string(j_v) + ") out of range");
       if (j_w < 0 || j_w >= m_binCountW)
         throw std::runtime_error("ChargeSharingKernel::GetKernel: j_w (= " + std::to_string(j_w) + ") out of range");
-      return m_kernels[_index(j_u, j_v, j_w)];
+      return m_kernels[_FindIndex(j_u, j_v, j_w)];
     }
 
     /** Access a specific entry of a kernel
@@ -406,13 +464,13 @@ enum {
      *  Kernel-indexing is col-major (ie. i = col * size + row) */
     std::vector<std::vector<float>> m_kernels; 
 
-    int _index (int j_u, int j_v, int j_w) const {
+    int _FindIndex (int j_u, int j_v, int j_w) const {
       if (j_u < 0 || j_u >= m_binCountU)
-        throw std::runtime_error("ChargeSharingKernel::_index: j_u (= " + std::to_string(j_u) + ") out of range");
+        throw std::runtime_error("ChargeSharingKernel::_FindIndex: j_u (= " + std::to_string(j_u) + ") out of range");
       if (j_v < 0 || j_v >= m_binCountV)
-        throw std::runtime_error("ChargeSharingKernel::_index: j_v (= " + std::to_string(j_v) + ") out of range");
+        throw std::runtime_error("ChargeSharingKernel::_FindIndex: j_v (= " + std::to_string(j_v) + ") out of range");
       if (j_w < 0 || j_w >= m_binCountW)
-        throw std::runtime_error("ChargeSharingKernel::_index: j_w (= " + std::to_string(j_w) + ") out of range");
+        throw std::runtime_error("ChargeSharingKernel::_FindIndex: j_w (= " + std::to_string(j_w) + ") out of range");
 
       return j_u + m_binCountU * (j_v + m_binCountV * j_w); 
     }
