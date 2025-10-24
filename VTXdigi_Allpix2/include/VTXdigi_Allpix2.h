@@ -1,6 +1,5 @@
 #pragma once
 
-// GAUDI
 // #include "Gaudi/Algorithm.h"
 // #include "GaudiKernel/IRndmGenSvc.h"
 // #include "GaudiKernel/RndmGenerators.h"
@@ -9,7 +8,6 @@
 #include "Gaudi/Accumulators/RootHistogram.h" // added by Jona
 #include "Gaudi/Accumulators/Histogram.h" // added by Jona
 
-// EDM4HEP
 #include "edm4hep/SimTrackerHitCollection.h"
 // #include "edm4hep/TrackerHit3DCollection.h"
 // #include "edm4hep/TrackerHitSimTrackerHitLinkCollection.h"
@@ -31,10 +29,6 @@
 // #include "DDRec/Vector3D.h"
 
 //#include "DDSegmentation/BitFieldCoder.h"
-
-
-#include "TRandom2.h" // added by Jona
-#include "TMatrixD.h" // added by Jona - for storing the kernel
 
 #include <string> // added by Jona
 #include <vector>
@@ -100,11 +94,6 @@ private:
   
   // -- Core algorithm functions -- 
   
-  /** Check that the pixel pitch and count match the sensor size in the geometry
-   */
-  void InitialSensorSizeCheck(const edm4hep::SimTrackerHit& simHit) const;
-  // TODO: remove this. 
-
   /** @brief Apply cuts to a simHit. 
    * @return true if the hit is accepted, false if dismissed. 
    */
@@ -169,7 +158,7 @@ private:
   std::tuple<float, float> computePathClippingFactors(float t_min, float t_max, const float entryPos_ax, const float pathLength_ax, const float sensorLength_ax) const;
 
   /** @brief Write simHit & path information to a CSV file */
-  void writeSimHitToCsv(const edm4hep::SimTrackerHit& simHit, const dd4hep::rec::Vector3D& simHitPos, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const int segmentNumber, const int layerIndex, const int i_u, const int i_v) const;
+  void appendSimHitToCsv(const HitInfo& hitInfo, const long int eventNumber, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const int i_u, const int i_v) const;
   
 
   // -- Properties --
@@ -211,7 +200,8 @@ private:
 
   Gaudi::Property<std::vector<float>> m_globalKernel{this, "GlobalKernel", {}, "Flat vector containing the global charge sharing kernel in row-major order (ie. row-by-row), starting on top left. Length must be KernelSize*KernelSize"};
 
-  Gaudi::Property<std::string> m_debugCsvName{this, "DebugCsvName", "", "Name of a CSV file to output detailed per-hit debug information. If empty, no debug output is created."};
+  Gaudi::Property<bool> m_debugHistograms{this, "DebugHistograms", false, "Whether to create and fill debug histograms. Not recommended for multithreading, might lead to crashes."};
+  Gaudi::Property<std::string> m_debugCsvFileName{this, "DebugCsvFileName", "", "Name of a CSV file to output detailed per-hit debug information. If empty, no debug output is created."};
 
 
   // -- Services --
@@ -225,8 +215,6 @@ private:
 
   // -- Global variables --
 
-  mutable long int m_eventNumber; // current event number
-
   const float m_numericLimit_float = 0.00001f; // limit for floating point comparisons
   const double m_numericLimit_double = 0.000000001; // limit for floating point
 
@@ -234,26 +222,24 @@ private:
   
   std::unordered_map<int, int> m_layerToIndex; // layer number (from cellID & m_layersToDigitize) to internal index (0...N-1, where N is the number of layers to digitize)
 
-  mutable bool m_debugFlag; // per-hit debug flag, set to true to add hit to debug histograms
-  mutable std::ofstream m_debugCsvFile; // debug output file
+  bool m_debugCsv = false; // whether to write debug CSV
+
+  mutable std::ofstream m_debugCsvFile; // debug output file. Only changed in intialize() and finalize(), otherwise only written to. **should** be more or less multi-thread safe, except for corrupted lines (I guess). ~ Jona 2025-10
 
   const dd4hep::rec::SurfaceMap* m_simSurfaceMap;
   
-  enum { 
-    counter_eventsRead, 
-    counter_eventsRejected_noSimHits, 
-    counter_eventsAccepted, 
-    counter_simHitsRead, 
-    counter_simHitsRejected_LayerNotToBeDigitized, 
-    counter_simHitsRejected_ChargeCut, 
-    counter_simHitsRejected_SurfaceDistToLarge, 
-    counter_simHitsRejected_OutsideSensor,
-    counter_simHitsRejected_NoSegmentsInSensor,
-    counter_simHitsAccepted, 
-    counter_digiHitsCreated, 
-    counterArrayLen }; // counter indices.
-
-  mutable std::array<long unsigned int, counterArrayLen> m_counters = {0}; // array of counters, size counterArrayLen
+  mutable Gaudi::Accumulators::Counter<> m_counter_eventsRead{this, "Events read"};
+  mutable Gaudi::Accumulators::Counter<> m_counter_eventsRejected_noSimHits{this, "Events rejected (no simHits)"};
+  mutable Gaudi::Accumulators::Counter<> m_counter_eventsAccepted{this, "Events accepted"};
+  
+  mutable Gaudi::Accumulators::Counter<> m_counter_simHitsRead{this, "SimTrackerHits read"};
+  mutable Gaudi::Accumulators::Counter<> m_counter_simHitsRejected_LayerNotToBeDigitized{this, "SimTrackerHits rejected (layer not to be digitized)"};
+  mutable Gaudi::Accumulators::Counter<> m_counter_simHitsRejected_ChargeCut{this, "SimTrackerHits rejected (charge cut)"};
+  mutable Gaudi::Accumulators::Counter<> m_counter_simHitsRejected_SurfaceDistToLarge{this, "SimTrackerHits rejected (surface distance too large)"};
+  mutable Gaudi::Accumulators::Counter<> m_counter_simHitsRejected_OutsideSensor{this, "SimTrackerHits rejected (outside sensor)"};
+  mutable Gaudi::Accumulators::Counter<> m_counter_simHitsAccepted{this, "SimTrackerHits accepted"};
+  mutable Gaudi::Accumulators::Counter<> m_counter_acceptedButNoSegmentsInSensor{this, "SimTrackerHits rejected (no segments in sensor)"};
+  mutable Gaudi::Accumulators::Counter<> m_counter_digiHitsCreated{this, "DigiHits created"};
 
   enum { 
     hist_hitE, 
