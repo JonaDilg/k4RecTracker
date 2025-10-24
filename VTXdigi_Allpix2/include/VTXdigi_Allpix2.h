@@ -74,68 +74,104 @@ struct VTXdigi_Allpix2 final
 
   std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> operator() (const edm4hep::SimTrackerHitCollection& simHits, const edm4hep::EventHeaderCollection& headers) const override;
 
-private:
+private: 
+  struct HitInfo {
+    bool debugFlag = false;
+    dd4hep::DDSegmentation::CellID cellID;
 
-  // -- Transformation between global frame and local sensor frame
+    dd4hep::rec::ISurface* simSurface;
 
-  /** Get the transformation matrix to the local sensor frame */
-  TGeoHMatrix FindTransformationMatrix(const edm4hep::SimTrackerHit& simHit) const;
-  TGeoHMatrix FindTransformationMatrix(const dd4hep::DDSegmentation::CellID& cellID) const;
+    int layerIndex;
+    float length[2]; // sensor length in u and v direction [mm]
+    float thickness; // sensor thickness [mm]
+    int pixCount[2]; // number of pixels in u and v direction
+    float pixPitch[2]; // pixel pitch in u and v direction [mm]
 
-  /** adjust the transformation matrix to the local sensor frame, so that it is x-u, y-v, z-n and right-handed. Uses user-input "LocalNormalVectorDir" */
-  void SetProperDirectFrame(TGeoHMatrix& sensorTransformMatrix) const;
+    float simCharge;
+    float simPathLength;
+    dd4hep::rec::Vector3D simLocalPos;
+
+    float charge;
+    float pathLength;
+    
+    int nSegments;
+    float segmentCharge;
+  };
   
-  /** Transform a global position to the local sensor frame of a hit, given its cellID */
-  dd4hep::rec::Vector3D GlobalToLocal(const dd4hep::rec::Vector3D& globalPos, const dd4hep::DDSegmentation::CellID& cellID) const;
-
-  /** Transform a local sensor position to the global frame, given the sensors cellID */
-  dd4hep::rec::Vector3D LocalToGlobal(const dd4hep::rec::Vector3D& localPos, const dd4hep::DDSegmentation::CellID& cellID) const;
-
-
-  // -- Helper functions --
-
-  /** Convert EDM4HEP vector to DD4HEP vector, and vice versa */
-  dd4hep::rec::Vector3D Vector3dConvert(edm4hep::Vector3d vec) const;
-  edm4hep::Vector3d Vector3dConvert(dd4hep::rec::Vector3D vec) const;
-
-  
-  /** Calculate the entry point and path vector of a simHit in local sensor frame. */
-  std::tuple<dd4hep::rec::Vector3D, dd4hep::rec::Vector3D> FindSimHitPath(const edm4hep::SimTrackerHit& simHit, const int layerIndex, const float length_u, const float length_v) const;
-
-  /** Calculate the clipping factors for the path of a simHit in local sensor frame. Used in FindSimHitPath() */
-  std::tuple<float, float> FindPathClippingFactors(float t_min, float t_max, const float entryPos_ax, const float pathLength_ax, const float sensorLength_ax) const;
-  
-  /**Given a histogram definition (x0, binWidth, nBins) and a value x, return the bin index in which x falls.
-   * Returns -1 if x is out of range.
-   * Bins are 0-indexed (vs ROOT's 1-indexing) */
-  int FindBinIndex(float x, float binX0, float binWidth, int binN) const;
-
-  /** Get the pixel indices (i_u, i_v) for a given position inside the sensor */
-  std::tuple<int, int> FindPixelIndices(const dd4hep::rec::Vector3D& pos, const int layerIndex, const float length_u, const float length_v) const;
-  
-  /** Get the in-pixel indices (j_u, j_v, j_w) for a given position inside the pixel and layer index
-   *  Assumption: each layer has only 1 type if sensor */
-  std::tuple<int, int, int> FindInPixelIndices(const dd4hep::rec::Vector3D& pos, const int layerIndex, const float length_u, const float length_v) const;
-
-  /** Get the local position of a pixel center (u,v,0) */
-  dd4hep::rec::Vector3D FindPixelCenter_Local(const int i_u, const int i_v, const int layerIndex, const dd4hep::rec::ISurface& simSurface) const;
-  
-  std::tuple<int, int, int, int, int> FindSegmentIndices(const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const int n, const int segmentNumber, const int layerIndex, const float length_u, const float length_v) const;
-
+  // -- Core algorithm functions -- 
   
   /** Check that the pixel pitch and count match the sensor size in the geometry
    */
   void InitialSensorSizeCheck(const edm4hep::SimTrackerHit& simHit) const;
-    
-  /** Apply cuts to a simHit. Returns true if the hit is accepted, false if dismissed. */
-  bool ApplySimHitCuts(const dd4hep::rec::ISurface& simSurface, const int layerIndex, const float simHitCharge, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const dd4hep::rec::Vector3D& simHitGlobalPos) const;
+  // TODO: remove this. 
+
+  /** @brief Apply cuts to a simHit. 
+   * @return true if the hit is accepted, false if dismissed. 
+   */
+  bool ApplySimHitCuts(HitInfo& hitInfo, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const dd4hep::rec::Vector3D& simHitGlobalPos) const;
   
-  /** Create a digitized hit */
-  void CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const float simHitCharge, const dd4hep::rec::Vector3D& position) const;
-  void CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const float simHitCharge, const edm4hep::Vector3d& position) const;
-  /** Write simHit position & path information to a CSV file */
-  void WriteSimHitToCsv(const edm4hep::SimTrackerHit& simHit, const dd4hep::rec::Vector3D& simHitPos, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const int segmentNumber, const int layerIndex, const int i_u, const int i_v) const;
+  /** @brief Calculate the entry point and path vector of a simHit in local sensor frame. */
+  std::tuple<dd4hep::rec::Vector3D, dd4hep::rec::Vector3D> ConstructSimHitPath(HitInfo& hitInfo, const edm4hep::SimTrackerHit& simHit) const;
   
+  /** @brief Create a digitized hit*/
+  void CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const dd4hep::rec::Vector3D& position, const float charge) const;
+
+
+  // -- Pixel and in-pixel binning magic (logic) --
+
+  /** @brief Given a histogram definition (x0, binWidth, nBins) and a value x, compute the bin index i in which x falls.
+   * @return Int, -1 if x is out of range.
+   * @note Bins are 0-indexed (vs ROOT's 1-indexing) */
+  int computeBinIndex(float x, float binX0, float binWidth, int binN) const;
+
+  /** @brief Compute the pixel indices (i_u, i_v) for a given (local) position inside the sensor */
+  std::tuple<int, int> computePixelIndices(const dd4hep::rec::Vector3D& pos, const int layerIndex, const float length_u, const float length_v) const;
+  
+  /** @brief Compute the in-pixel indices (j_u, j_v, j_w) for a given (local) position inside the pixel and layer index
+   *  @note Assumption: each layer has only 1 type if sensor */
+  std::tuple<int, int, int> computeInPixelIndices(const dd4hep::rec::Vector3D& pos, const int layerIndex, const float length_u, const float length_v) const;
+
+  /** @brief Compute the local position of a pixel center (u,v,0) */
+  dd4hep::rec::Vector3D computePixelCenter_Local(const int i_u, const int i_v, const int layerIndex, const dd4hep::rec::ISurface& simSurface) const;
+  
+  /** @brief Find the in-pixel indices (j_u, j_v, j_w) for a given (local) position inside the pixel and layer index
+   *  @note Assumption: each layer has only 1 type if sensor */
+  std::tuple<int, int, int, int, int> computeSegmentIndices(HitInfo& hitInfo, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const int segment) const;
+
+
+  // -- Transformation between global frame and local sensor frame -- 
+
+  /** @brief Computes the transformation matrix to the local sensor frame */
+  TGeoHMatrix computeTransformationMatrix(const edm4hep::SimTrackerHit& simHit) const;
+  /** @copydoc computeTransformationMatrix(const edm4hep::SimTrackerHit&) */
+  TGeoHMatrix computeTransformationMatrix(const dd4hep::DDSegmentation::CellID& cellID) const;
+
+  /** @brief Adjust the transformation matrix to the local sensor frame.
+   * Such that the coordinate system is x-u, y-v, z-n and right-handed. Uses user-input "LocalNormalVectorDir"
+   */
+  void setProperDirectFrame(TGeoHMatrix& sensorTransformMatrix) const;
+  
+  /** @brief Transform a global position to the local sensor frame of a hit, given its cellID */
+  dd4hep::rec::Vector3D transformGlobalToLocal(const dd4hep::rec::Vector3D& globalPos, const dd4hep::DDSegmentation::CellID& cellID) const;
+
+  /** @brief Transform a local sensor position to the global frame, given the sensors cellID */
+  dd4hep::rec::Vector3D transformLocalToGlobal(const dd4hep::rec::Vector3D& localPos, const dd4hep::DDSegmentation::CellID& cellID) const;
+
+
+  // -- Other helper functions --
+
+  /** @brief Convert EDM4HEP vector to DD4HEP vector, and vice versa */
+  dd4hep::rec::Vector3D convertVector(edm4hep::Vector3d vec) const;
+  /** @copydoc convertVector(edm4hep::Vector3d) */
+  edm4hep::Vector3d convertVector(dd4hep::rec::Vector3D vec) const;
+
+  /** @brief Calculate the clipping factors for the path of a simHit in local sensor frame. Used in FindSimHitPath() */
+  std::tuple<float, float> computePathClippingFactors(float t_min, float t_max, const float entryPos_ax, const float pathLength_ax, const float sensorLength_ax) const;
+
+  /** @brief Write simHit & path information to a CSV file */
+  void writeSimHitToCsv(const edm4hep::SimTrackerHit& simHit, const dd4hep::rec::Vector3D& simHitPos, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const int segmentNumber, const int layerIndex, const int i_u, const int i_v) const;
+  
+
   // -- Properties --
 
   Gaudi::Property<std::string> m_subDetName{this, "SubDetectorName", "VXD", "Name of the subdetector"};
@@ -147,7 +183,6 @@ private:
   Gaudi::Property<bool> m_cutDistanceToSurface{this, "CutDistanceToSurface", false, "Whether to cut simHits where the simHitPosition is not exactly on the DD4hep sensor simSurface."};
   Gaudi::Property<bool> m_cutPathOutsideSensor{this, "CutPathOutsideSensor", false, "Whether to cut simHits where the simHitPath is not on or inside the sensor."};
   Gaudi::Property<float> m_cutDepositedCharge{this, "CutDepositedCharge", 0.0, "Minimum charge (e-) of SimTrackerHit to be digitized"};
-  
   
   // Sensor pitch and size (enter either a single value for all layers or a vector, containing one value per layer)
   Gaudi::Property<std::vector<double>> m_pixelPitch_u{this, "PixelPitch_u", {0.025}, "Pixel pitch in direction of u in mm; either one per layer or one for all layers"};
@@ -253,7 +288,7 @@ enum {
     histWeighted2dArrayLen };
   std::vector<std::array<std::unique_ptr<Gaudi::Accumulators::StaticWeightedHistogram<2, Gaudi::Accumulators::atomicity::full, double>>, histWeighted2dArrayLen>> m_histWeighted2d;
 
-  // -- Classes -- 
+
 
   struct PixelChargeMatrix {
     /* Stores the charge deposited in a (size_u x size_v) pixel matrix around a given origin pixel.
