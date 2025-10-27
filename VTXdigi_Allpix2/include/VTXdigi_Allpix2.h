@@ -28,7 +28,7 @@
 #include "DDRec/SurfaceManager.h"
 // #include "DDRec/Vector3D.h"
 
-//#include "DDSegmentation/BitFieldCoder.h"
+#include "TRandom2.h"
 
 #include <string> // added by Jona
 #include <vector>
@@ -190,6 +190,8 @@ private:
   
   Gaudi::Property<int> m_kernelSize{this, "KernelSize", 3, "Size of the charge spreading kernel imported from Allpix2 (ie. 3 for 3x3 kernel) Must be an odd integer >= 3."};
   Gaudi::Property<float> m_pixelThreshold{this, "PixelThreshold", 100, "Threshold in electrons for a pixel to fire (1 eh-pair = 3.65 eV)"};
+  Gaudi::Property<float> m_electronicNoise{this, "PixelElectronicNoise", 20, "Electronic noise in electrons (1 eh-pair = 3.65 eV). Defines the width of the Gaussian noise added to each pixel."};
+  Gaudi::Property<float> m_timeSmearFactor{this, "PixelTimeSmear", 1.0, "Gaussian width for the time smearing applied on the pixel time. Applied for each digiHit individually."};
 
   Gaudi::Property<int> m_inPixelBinCount_u{this, "InPixelBinCount_u", 3, "Number of bins per pixel in u direction for charge deposition. Must agree with the imported Kernel map."};
   Gaudi::Property<int> m_inPixelBinCount_v{this, "InPixelBinCount_v", 3, "Number of bins per pixel in v direction for charge deposition. Must agree with the imported Kernel map."};
@@ -242,9 +244,10 @@ private:
   mutable Gaudi::Accumulators::Counter<> m_counter_digiHitsCreated{this, "DigiHits created"};
 
   enum { 
-    hist_hitE, 
-    hist_hitCharge,
-    hist_clusterSize, 
+    hist_simHitE, 
+    hist_simHitCharge,
+    hist_clusterSize_raw, 
+    hist_clusterSize_measured,
     hist_EntryPointX, 
     hist_EntryPointY, 
     hist_EntryPointZ, 
@@ -253,7 +256,9 @@ private:
     hist_DisplacementR, 
     hist_pathLength, 
     hist_pathLengthGeant4,
-    hist_HitChargeDifference, 
+    hist_HitRawChargeDifference, 
+    hist_pixelChargeMatrix_size_u,
+    hist_pixelChargeMatrix_size_v,
     histArrayLen}; // histogram indices. histArrayLen must be last
   std::array<std::unique_ptr<Gaudi::Accumulators::StaticRootHistogram<1>>, histArrayLen> m_histograms; 
 
@@ -263,6 +268,7 @@ enum {
   hist2d_hitMap_simHitDebug, 
   hist2d_hitMap_digiHitDebug, 
   hist2d_pathLength_vs_simHit_v,
+  hist_pixelChargeMatrixSize,
   hist2dArrayLen }; // 2D histogram indices. hist2dArrayLen must be last
   std::vector<std::array<std::unique_ptr<Gaudi::Accumulators::StaticRootHistogram<2>>, hist2dArrayLen>> m_histograms2d;
 
@@ -270,17 +276,19 @@ enum {
   mutable std::unordered_set<int> m_initialSensorSizeCheckPassed; // whether the check that the pixel pitch and count match the sensor size in the geometry has been done and passed
 
   enum {
-    histWeighted2d_averageCluster,
+    histWeighted2d_averageCluster_rawCharge,
+    histWeighted2d_averageCluster_measuredCharge,
     histWeighted2dArrayLen };
   std::vector<std::array<std::unique_ptr<Gaudi::Accumulators::StaticWeightedHistogram<2, Gaudi::Accumulators::atomicity::full, double>>, histWeighted2dArrayLen>> m_histWeighted2d;
 
 
 
-  struct PixelChargeMatrix {
+  class PixelChargeMatrix {
     /* Stores the charge deposited in a (size_u x size_v) pixel matrix around a given origin pixel.
      * In case charge is added outside the matrix bounds, the matrix range is expanded in that direction.
      * The size of the matrix is defined via the Gaudi property MaximumClusterSize.
     */
+  public:
     PixelChargeMatrix(int i_origin_u, int i_origin_v, int size_u, int size_v) 
       : m_origin{ i_origin_u, i_origin_v } {
         // At first, the range is centered around the origin
@@ -291,6 +299,10 @@ enum {
 
       m_pixelCharge.resize(size_u * size_v, 0.f);
     }
+
+    void Reset() {
+      std::fill(m_pixelCharge.begin(), m_pixelCharge.end(), 0.f);
+    }
     
     inline int GetOriginU() const { return m_origin[0]; }
     inline int GetOriginV() const { return m_origin[1]; }
@@ -298,28 +310,28 @@ enum {
     inline int GetRangeMax_u() const { return m_range_u[1]; }
     inline int GetRangeMin_v() const { return m_range_v[0]; }
     inline int GetRangeMax_v() const { return m_range_v[1]; }
-    inline int GetSizeU() const { return m_range_u[1] - m_range_u[0] + 1; }
-    inline int GetSizeV() const { return m_range_v[1] - m_range_v[0] + 1; }
+    inline int GetSize_u() const { return m_range_u[1] - m_range_u[0] + 1; }
+    inline int GetSize_v() const { return m_range_v[1] - m_range_v[0] + 1; }
 
     inline std::tuple<int, int> GetSize() const {
-      return std::make_tuple(GetSizeU(), GetSizeV());
+      return std::make_tuple(GetSize_u(), GetSize_v());
     }
     inline std::tuple<int, int> GetOrigin() const {
       return std::make_tuple(m_origin[0], m_origin[1]);
     }
-    
-    float TotalCharge() const {
+
+    float GetTotalRawCharge() const {
       return std::accumulate(m_pixelCharge.begin(), m_pixelCharge.end(), 0.f);
     }
 
-    float GetCharge(int i_u, int i_v) const {
+    float GetRawCharge(int i_u, int i_v) const {
       if (_OutOfBounds(i_u, i_v)) {
         throw std::runtime_error("PixelChargeMatrix::GetCharge: pixel i_u or i_v ( " + std::to_string(i_u) + ", " + std::to_string(i_v) + ") out of range");
       }
       return m_pixelCharge[_FindIndex(i_u, i_v)];
     }
 
-    void FillCharge(int i_u, int i_v, float charge) {
+    void FillRawCharge(int i_u, int i_v, float charge) {
       if (_OutOfBounds(i_u, i_v)) {
         // this might occur due to the limited size of the matrix or delta-electrons. 
         _ExpandMatrix(i_u, i_v);
@@ -329,24 +341,60 @@ enum {
       }
       m_pixelCharge[_FindIndex(i_u, i_v)] += charge;
     }
-    // TODO: resize array if out of bounds (instead of simply discarding the charge)? This would be slow, but more robust. Is probably acceptable if it only occurs rarely, ie. the size_u and size_v are large enough for >99% of cases. ~ Jona 2025-10
 
-    void Reset() {
-      std::fill(m_pixelCharge.begin(), m_pixelCharge.end(), 0.f);
+    // functins related to noise
+
+    void GenerateNoise(TRandom2& rndEngine, float sigma) {
+      /* Generate noise values for each pixel in the matrix.
+       * @param sigma Standard deviation of the Gaussian distribution.
+       * @param randGen Random number generator to use.
+      */
+      m_pixelChargeNoise.resize(GetSize_u() * GetSize_v(), 0.f);
+      for (int i = 0; i < GetSize_u() * GetSize_v(); ++i) {
+        m_pixelChargeNoise[i] = rndEngine.Gaus(0.f, sigma);
+      }
     }
 
-  private:
-    const int m_minExpansionStep = 5; // number of pixels to expand the matrix by, if out of bounds occurs
-  
-    int m_range_u[2], m_range_v[2]; // Inclusive matrix range. -> size = range[1] - range[0] + 1
-    // CAN theoretically extend into negative values, this ensures graceful handling of hits outside inditial bounds. These might be discarded later, if outside of sensor.
-    int m_origin[2]; // origin pixel indices
-    std::vector<float> m_pixelCharge;
+    float GetNoise(int i_u, int i_v) const {
+      if (_OutOfBounds(i_u, i_v)) {
+        throw std::runtime_error("PixelChargeMatrix::GetNoise: pixel i_u or i_v ( " + std::to_string(i_u) + ", " + std::to_string(i_v) + ") out of range");
+      }
+      if (m_pixelChargeNoise.size() != m_pixelCharge.size()) {
+        throw std::runtime_error("PixelChargeMatrix::GetNoise: noise has not been generated yet.");
+      }
+      return m_pixelChargeNoise[_FindIndex(i_u, i_v)];
+    }
 
+    float GetMeasuredCharge(int i_u, int i_v) const {
+      if (_OutOfBounds(i_u, i_v)) {
+        throw std::runtime_error("PixelChargeMatrix::GetCharge: pixel i_u or i_v ( " + std::to_string(i_u) + ", " + std::to_string(i_v) + ") out of range");
+      }
+      if (m_pixelChargeNoise.size() != m_pixelCharge.size()) {
+        throw std::runtime_error("PixelChargeMatrix::GetMeasuredCharge: noise has not been generated yet.");
+      }
+      return ( 
+        m_pixelCharge[_FindIndex(i_u, i_v)] +
+        m_pixelChargeNoise[_FindIndex(i_u, i_v)]);
+    }
+
+    float GetTotalMeasuredCharge() const {
+      if (m_pixelChargeNoise.size() != m_pixelCharge.size()) {
+        throw std::runtime_error("PixelChargeMatrix::TotalMeasuredCharge: noise has not been generated yet.");
+      }
+
+      return (
+        std::accumulate(m_pixelCharge.begin(), m_pixelCharge.end(), 0.f) + 
+        std::accumulate(m_pixelChargeNoise.begin(), m_pixelChargeNoise.end(), 0.f));
+    }
+
+
+
+  private:
+    
     inline int _FindIndex(int i_u, int i_v) const {
       int i_u_rel = i_u - m_range_u[0];
       int i_v_rel = i_v - m_range_v[0];
-      return i_u_rel + i_v_rel * GetSizeU();
+      return i_u_rel + i_v_rel * GetSize_u();
     }
 
     inline bool _OutOfBounds(int i_u, int i_v) const {
@@ -356,6 +404,11 @@ enum {
         || i_v < m_range_v[0]
         || i_v > m_range_v[1]);
     }
+
+    std::vector<float> m_pixelCharge;
+    std::vector<float> m_pixelChargeNoise;
+
+   // functions related to expanding the matrix
 
     void _ExpandMatrix(int i_u, int i_v) {
       /* Expand the matrix to include (i_u, i_v) and an excess of m_expansionStep pixels.
@@ -368,15 +421,15 @@ enum {
 
       // expand in u direction?
       if (i_u < m_range_u[0]) {
-        rangeNew_u[0] = i_u - m_minExpansionStep; // expand to include i_u plus some excess
+        rangeNew_u[0] = i_u - m_overExpansionStep; // expand to include i_u plus some excess
       } else if (i_u > m_range_u[1]) {
-        rangeNew_u[1] = i_u + m_minExpansionStep;
+        rangeNew_u[1] = i_u + m_overExpansionStep;
       }
       // expand in v direction?
       if (i_v < m_range_v[0]) {
-        rangeNew_v[0] = i_v - m_minExpansionStep;
+        rangeNew_v[0] = i_v - m_overExpansionStep;
       } else if (i_v > m_range_v[1]) {
-        rangeNew_v[1] = i_v + m_minExpansionStep;
+        rangeNew_v[1] = i_v + m_overExpansionStep;
       }
 
       const int newSizeU = rangeNew_u[1] - rangeNew_u[0] + 1;
@@ -386,10 +439,10 @@ enum {
 
       // copy old charges into new array, row by row
       
-      for (int row = 0; row < GetSizeV(); ++row) {
+      for (int row = 0; row < GetSize_v(); ++row) {
         std::copy(
-          m_pixelCharge.begin() + row * GetSizeU(),
-          m_pixelCharge.begin() + (row + 1) * GetSizeU(),
+          m_pixelCharge.begin() + row * GetSize_u(),
+          m_pixelCharge.begin() + (row + 1) * GetSize_u(),
           newPixelCharge.begin() + (row + (m_range_v[0] - rangeNew_v[0])) * newSizeU + (m_range_u[0] - rangeNew_u[0])
         );
       }
@@ -398,6 +451,13 @@ enum {
       std::copy(rangeNew_u, rangeNew_u + 2, m_range_u);
       std::copy(rangeNew_v, rangeNew_v + 2, m_range_v);
     }
+
+    const int m_overExpansionStep = 0; // number of extra pixels to expand the matrix by, when a charge is added outside the current bounds
+  
+    int m_range_u[2], m_range_v[2]; // Inclusive matrix range. -> size = range[1] - range[0] + 1
+    // CAN theoretically extend into negative values, this ensures graceful handling of hits outside inditial bounds. These might be discarded later, if outside of sensor.
+    int m_origin[2]; // origin pixel indices
+
   };
 
   // class to store the charge sharing kernel for each in-pixel bin
