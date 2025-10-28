@@ -9,12 +9,12 @@
 #include "Gaudi/Accumulators/Histogram.h" // added by Jona
 
 #include "edm4hep/SimTrackerHitCollection.h"
-// #include "edm4hep/TrackerHit3DCollection.h"
-// #include "edm4hep/TrackerHitSimTrackerHitLinkCollection.h"
-
 #include "edm4hep/EventHeaderCollection.h" // added by Jona
 #include "edm4hep/TrackerHitPlaneCollection.h" // added by Jona
 #include "edm4hep/TrackerHitSimTrackerHitLinkCollection.h" // added by Jona
+
+
+// #include "edm4hep/TrackerHit3DCollection.h"
 
 // K4FWCORE
 // #include "k4FWCore/DataHandle.h"
@@ -24,8 +24,8 @@
 #include "k4Interface/IUniqueIDGenSvc.h" // added by Jona
 
 // DD4HEP
-// #include "DD4hep/Detector.h" // for dd4hep::VolumeManager
 #include "DDRec/SurfaceManager.h"
+// #include "DD4hep/Detector.h" // for dd4hep::VolumeManager
 // #include "DDRec/Vector3D.h"
 
 #include "TRandom2.h"
@@ -69,42 +69,61 @@ struct VTXdigi_Allpix2 final
   std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> operator() (const edm4hep::SimTrackerHitCollection& simHits, const edm4hep::EventHeaderCollection& headers) const override;
 
 private: 
-  struct HitInfo {
-    bool debugFlag = false;
-    dd4hep::DDSegmentation::CellID cellID;
 
-    dd4hep::rec::ISurface* simSurface;
+  // -- Classes used internally --
 
-    int layerIndex;
-    float length[2]; // sensor length in u and v direction [mm]
-    float thickness; // sensor thickness [mm]
-    int pixCount[2]; // number of pixels in u and v direction
-    float pixPitch[2]; // pixel pitch in u and v direction [mm]
+  /** @brief Class to store relevant quantities about a simHit */
+  class HitInfo; 
+  friend class HitInfo;
 
-    float simCharge;
-    float simPathLength;
-    dd4hep::rec::Vector3D simLocalPos;
-
-    float charge;
-    float pathLength;
-    
-    int nSegments;
-    float segmentCharge;
+  /** @brief Struct to store the position information of a simHit, including its path through the sensor */
+  struct HitPosition {
+    dd4hep::rec::Vector3D entry;
+    dd4hep::rec::Vector3D path;
+    dd4hep::rec::Vector3D global;
+    dd4hep::rec::Vector3D local;
   };
-  
-  // -- Core algorithm functions -- 
-  
-  /** @brief Apply cuts to a simHit. 
-   * @return true if the hit is accepted, false if dismissed. 
-   */
-  bool ApplySimHitCuts(HitInfo& hitInfo, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const dd4hep::rec::Vector3D& simHitGlobalPos) const;
-  
-  /** @brief Calculate the entry point and path vector of a simHit in local sensor frame. */
-  std::tuple<dd4hep::rec::Vector3D, dd4hep::rec::Vector3D> ConstructSimHitPath(HitInfo& hitInfo, const edm4hep::SimTrackerHit& simHit) const;
-  
-  /** @brief Create a digitized hit*/
-  void CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const dd4hep::rec::Vector3D& position, const float charge) const;
 
+  /** @brief Class to store the charge deposited in each pixel around the simHit. 
+   * @note Matrix size starts from property "MaximumClusterSize" and expands dynamically if charge is shared to pixels outside of that range */
+  class PixelChargeMatrix;
+  
+  /** @brief Class to store and access charge sharing kernels */
+  class ChargeSharingKernels;
+  
+  // ---- Core algorithm functions ----
+
+  /** @brief Initial checks before processing an event.
+   * @return true if setup is OK and event can be processed, false if event has no simHits 
+   * @note throws if chargeSharingKernels or surfaceMap are invalid */
+  bool CheckInitialSetup(const edm4hep::SimTrackerHitCollection& simHits, const edm4hep::EventHeaderCollection& headers) const;
+
+  /** @brief Apply layer cuts to a simHit: reject hits not on layers to be digitized, if Gaudi property "LayersToDigitize" is set.
+   * @return true if the hit is accepted, false if dismissed. */
+  bool CheckLayerCut(const edm4hep::SimTrackerHit& simHit) const;
+
+  /** @brief Gather hit information and position from a simHit.
+   * @return A tuple containing the hit information and position. */
+  std::tuple<HitInfo, HitPosition> GatherHitInfoAndPosition(const edm4hep::SimTrackerHit& simHit, const edm4hep::EventHeaderCollection& headers) const;
+
+  /** @brief Apply cuts to a simHit. 
+   * @return true if the hit is accepted, false if dismissed. */
+  bool CheckSimHitCuts(const HitInfo& hitInfo, const HitPosition& hitPos) const;
+
+  /** @brief Loop over the path segments and share each segments deposited charge among its neighbors according to the charge sharing kernels.
+   * @return A PixelChargeMatrix containing the charge deposited in each pixel around the simHit.
+   * @note Noise has not yet been generated for the pixelChargeMatrix. */
+  PixelChargeMatrix ShareCharge(HitInfo& hitInfo, const HitPosition& hitPos) const;
+
+  /** @brief Find pixels with charge above threshold in pixelChargeMatrix, create digiHits and fill digiHits and digiHitsLinks collections */
+  void AnalyseSharedCharge(const HitInfo& hitInfo, const PixelChargeMatrix& pixelChargeMatrix, const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks) const;
+  
+  /** @brief Fill debug histograms.
+   * @note Contains a very similar loop to AnalyseSharedCharge, but does not create digiHits. This optimises performance with debug histograms disabled.*/
+  void FillDebugHistograms(const HitInfo& hitInfo, const HitPosition& hitPos, const PixelChargeMatrix& pixelChargeMatrix) const;
+
+
+  // ---- Helper functions (called by core algorithm functions) ----
 
   // -- Pixel and in-pixel binning magic (logic) --
 
@@ -149,16 +168,23 @@ private:
 
   // -- Other helper functions --
 
-  /** @brief Convert EDM4HEP vector to DD4HEP vector, and vice versa */
+  /** @brief Simply convert EDM4HEP vector to DD4HEP vector, and vice versa */
   dd4hep::rec::Vector3D convertVector(edm4hep::Vector3d vec) const;
   /** @copydoc convertVector(edm4hep::Vector3d) */
   edm4hep::Vector3d convertVector(dd4hep::rec::Vector3D vec) const;
 
-  /** @brief Calculate the clipping factors for the path of a simHit in local sensor frame. Used in FindSimHitPath() */
+  /** @brief Calculate the entry point and path vector of a simHit (in local sensor frame).
+   * @return A tuple containing (0) the entryPoint into the sensor and (1) the path vector through the sensor */
+  std::tuple<dd4hep::rec::Vector3D, dd4hep::rec::Vector3D> constructSimHitPath(HitInfo& hitInfo, HitPosition& hitPos, const edm4hep::SimTrackerHit& simHit) const;
+
+  /** @brief Calculate the clipping factors for the path of a simHit in local sensor frame. Called in constructSimHitPath() */
   std::tuple<float, float> computePathClippingFactors(float t_min, float t_max, const float entryPos_ax, const float pathLength_ax, const float sensorLength_ax) const;
 
-  /** @brief Write simHit & path information to a CSV file */
-  void appendSimHitToCsv(const HitInfo& hitInfo, const long int eventNumber, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const int i_u, const int i_v) const;
+  /** @brief Create a digitized hit*/
+  void createDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const dd4hep::rec::Vector3D& position, const float charge) const;
+
+  /** @brief Write simHit & path information to the debugging CSV file. Definitely not thread-safe. */
+  void appendSimHitToCsv(const HitInfo& hitInfo, const HitPosition& hitPos, const int i_u, const int i_v) const;
   
 
   // -- Properties --
@@ -215,7 +241,9 @@ private:
   dd4hep::VolumeManager m_volumeManager; // volume manager to get the physical cell sensitive volume
   SmartIF<IUniqueIDGenSvc> m_uidSvc;
 
-  // -- Global variables --
+  const dd4hep::rec::SurfaceMap* m_simSurfaceMap;
+
+  // -- Constants --
 
   const float m_numericLimit_float = 0.00001f; // limit for floating point comparisons
   const double m_numericLimit_double = 0.000000001; // limit for floating point
@@ -228,8 +256,10 @@ private:
 
   mutable std::ofstream m_debugCsvFile; // debug output file. Only changed in intialize() and finalize(), otherwise only written to. **should** be more or less multi-thread safe, except for corrupted lines (I guess). ~ Jona 2025-10
 
-  const dd4hep::rec::SurfaceMap* m_simSurfaceMap;
-  
+  std::unique_ptr<ChargeSharingKernels> m_chargeSharingKernels; // the charge sharing kernel
+
+  // -- Accumulators --
+
   mutable Gaudi::Accumulators::Counter<> m_counter_eventsRead{this, "Events read"};
   mutable Gaudi::Accumulators::Counter<> m_counter_eventsRejected_noSimHits{this, "Events rejected (no simHits)"};
   mutable Gaudi::Accumulators::Counter<> m_counter_eventsAccepted{this, "Events accepted"};
@@ -281,14 +311,114 @@ enum {
     histWeighted2dArrayLen };
   std::vector<std::array<std::unique_ptr<Gaudi::Accumulators::StaticWeightedHistogram<2, Gaudi::Accumulators::atomicity::full, double>>, histWeighted2dArrayLen>> m_histWeighted2d;
 
+  // TODO: implement having a kernel per layer (array of unique_ptr ?)
+};
 
 
-  class PixelChargeMatrix {
-    /* Stores the charge deposited in a (size_u x size_v) pixel matrix around a given origin pixel.
-     * In case charge is added outside the matrix bounds, the matrix range is expanded in that direction.
-     * The size of the matrix is defined via the Gaudi property MaximumClusterSize.
-    */
+
+
+
+
+class VTXdigi_Allpix2::HitInfo {
+  bool m_debugFlag = false; // set to true for hits that should be logged in the debug CSV output
+
+  long int m_eventNumber;
+  dd4hep::DDSegmentation::CellID m_cellID;
+  dd4hep::rec::ISurface* m_simSurface;
+
+  int m_layerIndex;
+  float m_charge;
+  float m_simPathLength;
+
+  float m_length[2]; // sensor length in u and v direction [mm]
+  float m_thickness; // sensor thickness [mm]
+  float m_pixPitch[2]; // pixel pitch in u and v direction [mm]
+  int m_pixCount[2]; // number of pixels in u and v direction
+
+  int m_nSegments;
+
   public:
+    HitInfo() = default;
+
+    HitInfo(const VTXdigi_Allpix2& vtxdigi_AP2, const edm4hep::SimTrackerHit& simHit, const edm4hep::EventHeaderCollection& headers) {
+      m_eventNumber = headers.at(0).getEventNumber();
+      m_cellID = simHit.getCellID(); // TODO: apply 64-bit length mask as done in DDPlanarDigi.cpp? ~ Jona 2025-09
+
+      const auto itSimSurface = vtxdigi_AP2.m_simSurfaceMap->find(m_cellID);
+      if (itSimSurface == vtxdigi_AP2.m_simSurfaceMap->end())
+        throw std::runtime_error("VTXdigi_Allpix2::HitInfo constructor (called from VTXdigi_Allpix2::operator()): No simSurface found for cellID " + std::to_string(m_cellID) + ". Did initialize() succeed?");
+
+      m_simSurface = itSimSurface->second;
+      if (!m_simSurface)
+        throw std::runtime_error("VTXdigi_Allpix2::HitInfo constructor (called from VTXdigi_Allpix2::operator()): SimSurface pointer for cellID " + std::to_string(m_cellID) + " is null. Did initialize() succeed?");
+
+      /* Use layer index instead of layer to avoid segfaults, if layers are not numbered consecutively
+       * This will throw if layer not in map (ie. layers not-to-be digitized have not beed dismissed yet).*/
+      m_layerIndex = vtxdigi_AP2.m_layerToIndex.at(vtxdigi_AP2.m_cellIDdecoder->get(m_cellID, "layer"));
+
+      m_charge = simHit.getEDep() * (dd4hep::GeV / dd4hep::keV) * vtxdigi_AP2.m_chargePerkeV; // in electrons
+      m_simPathLength = simHit.getPathLength(); // in mm
+
+      // sensor dimensions in local frame, in mm
+      m_length[0] = m_simSurface->length_along_u() * 10; // convert to mm
+      m_length[1] = m_simSurface->length_along_v() * 10; // convert to mm
+
+      m_thickness = vtxdigi_AP2.m_sensorThickness.value().at(m_layerIndex);
+
+      m_pixPitch[0] = vtxdigi_AP2.m_pixelPitch_u.value().at(m_layerIndex);
+      m_pixPitch[1] = vtxdigi_AP2.m_pixelPitch_v.value().at(m_layerIndex);
+
+      m_pixCount[0] = vtxdigi_AP2.m_pixelCount_u.value().at(m_layerIndex);
+      m_pixCount[1] = vtxdigi_AP2.m_pixelCount_v.value().at(m_layerIndex);
+
+      /* sanity check: pixel pitch * pixel count must match sensor size from geometry. 
+      * Do this after applying cuts, as non-digitized layers would lead to out-of-bounds access in m_pixelCount_u etc.
+      * Doing this for every simHit is not optimal (because pixPitch and pixCount per layer are constant across all events)
+      * but accessing the surface-based sensor size from initialize() is not easy to implement (without access to a cellID that is known to lie on that layer). */
+      if ( abs(m_pixPitch[0] * m_pixCount[0] - m_length[0]) > vtxdigi_AP2.m_numericLimit_float
+        || abs(m_pixPitch[1] * m_pixCount[1] - m_length[1]) > vtxdigi_AP2.m_numericLimit_float) {
+        throw GaudiException("Gaudi properties (pixelPitch * pixelCount) do not match sensor size from detector geometry in layer " + std::to_string(vtxdigi_AP2.m_cellIDdecoder->get(m_cellID, "layer")) + " in operator().", "VTXdigi_Allpix2::GatherHitInfo()", StatusCode::FAILURE);
+      }
+    }
+
+
+    inline void setDebugFlag() { m_debugFlag = true; }
+    inline bool debugFlag() const { return m_debugFlag; }
+
+    inline long int eventNumber() const { return m_eventNumber; }
+    inline dd4hep::DDSegmentation::CellID cellID() const { return m_cellID; }
+    inline dd4hep::rec::ISurface* simSurface() const { return m_simSurface; }
+
+    inline int layerIndex() const { return m_layerIndex; }
+    inline float charge() const { return m_charge; }
+    inline float simPathLength() const { return m_simPathLength; }
+
+    inline float length(int axis) const { return m_length[axis]; } // axis: 0 = u, 1 = v
+    inline float thickness() const { return m_thickness; }
+    inline float pixPitch(int axis) const { return m_pixPitch[axis]; } // axis: 0 = u, 1 = v
+    inline int pixCount(int axis) const { return m_pixCount[axis]; } // axis: 0 = u, 1 = v  
+
+    inline void setNSegments(int n) { m_nSegments = n; }
+    inline int nSegments() const { return m_nSegments; }
+  }; // class HitInfo
+
+class VTXdigi_Allpix2::PixelChargeMatrix {
+  /* Stores the charge deposited in a (size_u x size_v) pixel matrix around a given origin pixel.
+    * In case charge is added outside the matrix bounds, the matrix range is expanded in that direction.
+    * The size of the matrix is defined via the Gaudi property MaximumClusterSize.
+  */
+
+  std::vector<float> m_pixelCharge;
+  std::vector<float> m_pixelChargeNoise;
+
+  const int m_overExpansionStep = 0; // number of extra pixels to expand the matrix by, when a charge is added outside the current bounds
+  
+  int m_range_u[2], m_range_v[2]; // Inclusive matrix range. -> size = range[1] - range[0] + 1
+  // CAN theoretically extend into negative values, this ensures graceful handling of hits outside inditial bounds. These might be discarded later, if outside of sensor.
+  int m_origin[2]; // origin pixel indices
+
+  public:
+
     PixelChargeMatrix(int i_origin_u, int i_origin_v, int size_u, int size_v) 
       : m_origin{ i_origin_u, i_origin_v } {
         // At first, the range is centered around the origin
@@ -387,8 +517,6 @@ enum {
         std::accumulate(m_pixelChargeNoise.begin(), m_pixelChargeNoise.end(), 0.f));
     }
 
-
-
   private:
     
     inline int _FindIndex(int i_u, int i_v) const {
@@ -404,11 +532,6 @@ enum {
         || i_v < m_range_v[0]
         || i_v > m_range_v[1]);
     }
-
-    std::vector<float> m_pixelCharge;
-    std::vector<float> m_pixelChargeNoise;
-
-   // functions related to expanding the matrix
 
     void _ExpandMatrix(int i_u, int i_v) {
       /* Expand the matrix to include (i_u, i_v) and an excess of m_expansionStep pixels.
@@ -451,17 +574,17 @@ enum {
       std::copy(rangeNew_u, rangeNew_u + 2, m_range_u);
       std::copy(rangeNew_v, rangeNew_v + 2, m_range_v);
     }
+  }; // class PixelChargeMatrix
 
-    const int m_overExpansionStep = 0; // number of extra pixels to expand the matrix by, when a charge is added outside the current bounds
-  
-    int m_range_u[2], m_range_v[2]; // Inclusive matrix range. -> size = range[1] - range[0] + 1
-    // CAN theoretically extend into negative values, this ensures graceful handling of hits outside inditial bounds. These might be discarded later, if outside of sensor.
-    int m_origin[2]; // origin pixel indices
+class VTXdigi_Allpix2::ChargeSharingKernels {
+    int m_binCountU, m_binCountV, m_binCountW;
+    int m_kernelSize;
+    /** Vector of kernels, one per in-pixel bin
+     *  Kernel-indexing is col-major (ie. i = col * size + row) */
+    std::vector<std::vector<float>> m_kernels; 
 
-  };
+  public:
 
-  // class to store the charge sharing kernel for each in-pixel bin
-  struct ChargeSharingKernels {
     ChargeSharingKernels(int& binCountU, int& binCountV, int& binCountW, int& kernelSize) : m_binCountU(binCountU), m_binCountV(binCountV), m_binCountW(binCountW), m_kernelSize(kernelSize) {
       if (kernelSize < 3 || kernelSize % 2 == 0)
         throw std::runtime_error("ChargeSharingKernel: Kernel size must be an odd integer >= 3, but is " + std::to_string(kernelSize) + ".");
@@ -539,11 +662,6 @@ enum {
     }
 
   private:
-    int m_binCountU, m_binCountV, m_binCountW;
-    int m_kernelSize;
-    /** Vector of kernels, one per in-pixel bin
-     *  Kernel-indexing is col-major (ie. i = col * size + row) */
-    std::vector<std::vector<float>> m_kernels; 
 
     int _FindIndex (int j_u, int j_v, int j_w) const {
       if (j_u < 0 || j_u >= m_binCountU)
@@ -555,9 +673,4 @@ enum {
 
       return j_u + m_binCountU * (j_v + m_binCountV * j_w); 
     }
-
-  }; // struct ChargeSharingKernel
-
-  std::unique_ptr<ChargeSharingKernels> m_chargeSharingKernels; // the charge sharing kernel
-  // TODO: implement having a kernel per layer (array of unique_ptr ?)
-};
+  }; // class ChargeSharingKernel
