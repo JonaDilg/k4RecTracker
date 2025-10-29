@@ -808,6 +808,10 @@ void VTXdigi_Allpix2::FillDebugHistograms(const HitInfo& hitInfo, const HitPosit
   int nPixelsReceivedCharge = 0, nPixelsFired = 0;
 
   // fill in-sensor-dependent histograms (not efficient with histograms enabled, but makes code slightly faster when histograms are disabled)
+
+  const float totalChargeRaw = pixelChargeMatrix.GetTotalRawCharge();
+  const float totalChargeMeasured = pixelChargeMatrix.GetTotalMeasuredCharge();
+
   for (int i_u = pixelChargeMatrix.GetRangeMin_u(); i_u <= pixelChargeMatrix.GetRangeMax_u(); ++i_u) {
     for (int i_v = pixelChargeMatrix.GetRangeMin_v(); i_v <= pixelChargeMatrix.GetRangeMax_v(); ++i_v) {
 
@@ -816,7 +820,7 @@ void VTXdigi_Allpix2::FillDebugHistograms(const HitInfo& hitInfo, const HitPosit
 
       nPixelsReceivedCharge++;
 
-      (*m_histWeighted2d.at(hitInfo.layerIndex()).at(histWeighted2d_averageCluster_rawCharge))[{i_u - i_u_simHit, i_v - i_v_simHit}] += pixelChargeRaw / pixelChargeMatrix.GetTotalRawCharge(); // in e-
+      (*m_histWeighted2d.at(hitInfo.layerIndex()).at(histWeighted2d_averageCluster_rawCharge))[{i_u - i_u_simHit, i_v - i_v_simHit}] += pixelChargeRaw / totalChargeRaw; // in e-
       
       float pixelChargeMeasured = pixelChargeRaw + pixelChargeMatrix.GetNoise(i_u, i_v);
       if (pixelChargeMeasured < m_pixelThreshold) continue;
@@ -830,7 +834,7 @@ void VTXdigi_Allpix2::FillDebugHistograms(const HitInfo& hitInfo, const HitPosit
       ++ (*m_histograms.at(hist_DisplacementV))[ (pixelCenterLocal.y() - hitPos.local.y()) * 1000]; // convert mm to um
       ++ (*m_histograms.at(hist_DisplacementR))[sqrt( (pixelCenterGlobal.x() - hitPos.global.x())*(pixelCenterGlobal.x() - hitPos.global.x()) + (pixelCenterGlobal.y() - hitPos.global.y())*(pixelCenterGlobal.y() - hitPos.global.y()) + (pixelCenterGlobal.z() - hitPos.global.z())*(pixelCenterGlobal.z() - hitPos.global.z()) ) * 1000]; // convert mm to um
 
-      (*m_histWeighted2d.at(hitInfo.layerIndex()).at(histWeighted2d_averageCluster_measuredCharge))[{i_u - i_u_simHit, i_v - i_v_simHit}] += pixelChargeMeasured / pixelChargeMatrix.GetTotalMeasuredCharge() ; // in e-
+      (*m_histWeighted2d.at(hitInfo.layerIndex()).at(histWeighted2d_averageCluster_measuredCharge))[{i_u - i_u_simHit, i_v - i_v_simHit}] += pixelChargeMeasured / totalChargeMeasured; // in e-
     }
   }
   ++(*m_histograms.at(hist_clusterSize_raw))[static_cast<double>(nPixelsReceivedCharge)]; // cluster size = number of pixels fired per simHit
@@ -1115,3 +1119,7 @@ void VTXdigi_Allpix2::appendSimHitToCsv(const HitInfo& hitInfo, const HitPositio
   verbose() << "Wrote simHit with event " << hitInfo.eventNumber() << ", layerIndex " << hitInfo.layerIndex() << ", segmentN " << hitInfo.nSegments() << ", i_u " << i_u << ", i_v " << i_v << " to debug CSV file." << endmsg;
   return;
 }
+
+// void VTXdigi_Allpix2::loadKernelsFromFile() {
+
+// }
