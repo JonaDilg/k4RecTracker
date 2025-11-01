@@ -37,6 +37,7 @@
 // for debugging-csv
 #include <iostream>
 #include <fstream>  // for std::ofstream
+#include <sstream>
 
 #include "GAUDI_VERSION.h"
 
@@ -168,6 +169,8 @@ private:
 
   // -- Other helper functions --
 
+  void loadKernels();
+
   /** @brief Simply convert EDM4HEP vector to DD4HEP vector, and vice versa */
   dd4hep::rec::Vector3D convertVector(edm4hep::Vector3d vec) const;
   /** @copydoc convertVector(edm4hep::Vector3d) */
@@ -214,19 +217,28 @@ private:
   Gaudi::Property<float> m_targetPathSegmentLength{this, "TargetPathSegmentLength", 0.002, "Length of the path segments, that the simHits path through a sensor is divided into. In mm. Defines the precision of the charge deposition along the path."};
   Gaudi::Property<float> m_pathLengthShorteningFactorGeant4{this, "PathLengthShorteningFactorGeant4", 1.05, "Relative path length (to Geant4 path length), above which the path is shortened to the Geant4 length. (Geant4 length includes multiple scattering and curling in B-field, which are lost in our linear approximation of the path)."};
   
-  Gaudi::Property<int> m_kernelSize{this, "KernelSize", 3, "Size of the charge spreading kernel imported from Allpix2 (ie. 3 for 3x3 kernel) Must be an odd integer >= 3."};
   Gaudi::Property<float> m_pixelThreshold{this, "PixelThreshold", 100, "Threshold in electrons for a pixel to fire (1 eh-pair = 3.65 eV)"};
   Gaudi::Property<float> m_electronicNoise{this, "PixelElectronicNoise", 20, "Electronic noise in electrons (1 eh-pair = 3.65 eV). Defines the width of the Gaussian noise added to each pixel."};
   Gaudi::Property<float> m_timeSmearFactor{this, "PixelTimeSmear", 1.0, "Gaussian width for the time smearing applied on the pixel time. Applied for each digiHit individually."};
-
+  
   Gaudi::Property<int> m_inPixelBinCount_u{this, "InPixelBinCount_u", 3, "Number of bins per pixel in u direction for charge deposition. Must agree with the imported Kernel map."};
   Gaudi::Property<int> m_inPixelBinCount_v{this, "InPixelBinCount_v", 3, "Number of bins per pixel in v direction for charge deposition. Must agree with the imported Kernel map."};
   Gaudi::Property<int> m_inPixelBinCount_w{this, "InPixelBinCount_w", 3, "Number of bins per pixel in w (vertical) direction for charge deposition. Must agree with the imported Kernel map."};
-
+  
   // Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). Defaults to no transformation.
   Gaudi::Property<std::string> m_localNormalVectorDir{this, "LocalNormalVectorDir", "", "Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). If defined correctly, the local frame is transformed such that z is orthogonal to the sensor plane."};
 
+  Gaudi::Property<int> m_kernelSize{this, "KernelSize", 3, "Size of the charge spreading kernel imported from Allpix2 (ie. 3 for 3x3 kernel) Must be an odd integer >= 3."};
+
+  // -- Kernel import properties --
+
   Gaudi::Property<std::vector<float>> m_globalKernel{this, "GlobalKernel", {}, "Flat vector containing the global charge sharing kernel in row-major order (ie. row-by-row), starting on top left. Length must be KernelSize*KernelSize"};
+
+  Gaudi::Property<std::string> m_kernelFileName{this, "KernelFileName", "", "Name of the file supplying the charge sharing kernel."};
+  Gaudi::Property<int> m_kernelSkipLines{this, "KernelSkipLines", 1, "Number of header lines to skip at the beginning of the kernel file."};
+  Gaudi::Property<std::string> m_kernelIndexColumns{this, "KernelIndexColumns", "+u,+v,+w", "Comma-separated list of the headers for the first three columns, ie. \"+u,-v,+w\", where a negative sign indicates that the binning runs in the negative direction."};
+  Gaudi::Property<std::string> m_kernelMatrixColumns{this, "KernelMatrixColumns", "row,+u,-v", "Comma-separated definition of the kernel matrix. First entry is either \"row\" or \"column\" to indicate if the matrix is stored row-by-row or column-by-column. Second and third entries encode the direction of the two matrix axes, eg. \"+u,-v\". A negative sign indicates that the binning runs in the negative direction. Defaults to row-dominated storage with first axis +u and second axis -v, similar to how matrices are stored in eg. WolframAlpha"};
+
 
   Gaudi::Property<bool> m_debugHistograms{this, "DebugHistograms", false, "Whether to create and fill debug histograms. Not recommended for multithreading, might lead to crashes."};
   Gaudi::Property<std::string> m_debugCsvFileName{this, "DebugCsvFileName", "", "Name of a CSV file to output detailed per-hit debug information. If empty, no debug output is created."};
@@ -286,7 +298,8 @@ private:
     hist_DisplacementR, 
     hist_pathLength, 
     hist_pathLengthGeant4,
-    hist_HitRawChargeDifference, 
+    hist_chargeCollectionEfficiency_raw, 
+    hist_chargeCollectionEfficiency,
     hist_pixelChargeMatrix_size_u,
     hist_pixelChargeMatrix_size_v,
     histArrayLen}; // histogram indices. histArrayLen must be last
@@ -295,10 +308,9 @@ private:
 enum { 
   hist2d_hitMap_simHits,
   hist2d_hitMap_digiHits, 
-  hist2d_hitMap_simHitDebug, 
-  hist2d_hitMap_digiHitDebug, 
   hist2d_pathLength_vs_simHit_v,
-  hist_pixelChargeMatrixSize,
+  hist2d_pixelChargeMatrixSize,
+  hist2d_pathAngleToSensorNormal,
   hist2dArrayLen }; // 2D histogram indices. hist2dArrayLen must be last
   std::vector<std::array<std::unique_ptr<Gaudi::Accumulators::StaticRootHistogram<2>>, hist2dArrayLen>> m_histograms2d;
 
@@ -507,14 +519,29 @@ class VTXdigi_Allpix2::PixelChargeMatrix {
         m_pixelChargeNoise[_FindIndex(i_u, i_v)]);
     }
 
-    float GetTotalMeasuredCharge() const {
-      if (m_pixelChargeNoise.size() != m_pixelCharge.size()) {
-        throw std::runtime_error("PixelChargeMatrix::TotalMeasuredCharge: noise has not been generated yet.");
-      }
+    // float GetTotalMeasuredCharge() const {
+    //   if (m_pixelChargeNoise.size() != m_pixelCharge.size()) {
+    //     throw std::runtime_error("PixelChargeMatrix::TotalMeasuredCharge: noise has not been generated yet.");
+    //   }
 
-      return (
-        std::accumulate(m_pixelCharge.begin(), m_pixelCharge.end(), 0.f) + 
-        std::accumulate(m_pixelChargeNoise.begin(), m_pixelChargeNoise.end(), 0.f));
+    //   return (
+    //     std::accumulate(m_pixelCharge.begin(), m_pixelCharge.end(), 0.f) + 
+    //     std::accumulate(m_pixelChargeNoise.begin(), m_pixelChargeNoise.end(), 0.f));
+    // }
+
+    float GetTotalMeasuredCharge(float threshold) const {
+      if (m_pixelChargeNoise.size() != m_pixelCharge.size())
+        throw std::runtime_error("PixelChargeMatrix::TotalMeasuredCharge: noise has not been generated yet.");
+      
+      float totalCharge = 0.f;
+      for (int i_u = m_range_u[0]; i_u <= m_range_u[1]; ++i_u) {
+        for (int i_v = m_range_v[0]; i_v <= m_range_v[1]; ++i_v) {
+          float measuredCharge = GetMeasuredCharge(i_u, i_v);
+          if (measuredCharge >= threshold)
+            totalCharge += measuredCharge;
+        }
+      }
+      return totalCharge;
     }
 
   private:
@@ -620,6 +647,16 @@ class VTXdigi_Allpix2::ChargeSharingKernels {
           // We store kernels in col-major order, starting at bottom left (lowest bin index)
           // m_kernels.at(index).at(col * m_kernelSize + row) = weights.at(row*m_kernelSize + col);
           m_kernels.at(index).at(col * m_kernelSize + row) = weights.at((m_kernelSize-1-row)*m_kernelSize + col);
+        }
+      }
+    }
+
+    void SetAllKernels(const std::vector<float>& weights) {
+      for (int j_u = 0; j_u < m_binCountU; ++j_u) {
+        for (int j_v = 0; j_v < m_binCountV; ++j_v) {
+          for (int j_w = 0; j_w < m_binCountW; ++j_w) {
+            SetKernel(j_u, j_v, j_w, weights);
+          }
         }
       }
     }

@@ -155,34 +155,9 @@ StatusCode VTXdigi_Allpix2::initialize() {
     verbose() << "   - Layer " << layer << " (index " << index << "): pitch_u = " << m_pixelPitch_u.value().at(index) << " mm, pitch_v = " << m_pixelPitch_v.value().at(index) << " mm, count_u = " << m_pixelCount_u.value().at(index) << ", count_v = " << m_pixelCount_v.value().at(index) << ", thickness = " << m_sensorThickness.value().at(index) << " mm" << endmsg;
   }
 
-  // check that given pixel pitch and count match the sensor size in the geometry
-  
+  // load charge sharing kernels
 
-  // -- import charge sharing kernels --
-
-  verbose() << " - Importing charge sharing kernels..." << endmsg;
-  m_chargeSharingKernels = std::make_unique<ChargeSharingKernels>(m_inPixelBinCount_u.value(), m_inPixelBinCount_v.value(), m_inPixelBinCount_w.value(), m_kernelSize.value());
-
-  // TODO: read the kernels from file. Instead, set gaussian kernels for now
-
-  if (!m_globalKernel.value().empty()) {
-    debug() << " - Global kernel specified in <config>, applying this for all layers" << endmsg;
-
-    if (m_globalKernel.size() != static_cast<size_t>(m_kernelSize * m_kernelSize)) {
-      error() << "Global kernel size does not match KernelSize property. Abort." << endmsg;
-      return StatusCode::FAILURE;
-    }
-
-    // reorder global kernel to match 
-    
-    for (int i_u=0; i_u<m_inPixelBinCount_u.value(); i_u++) {
-      for (int i_v=0; i_v<m_inPixelBinCount_v.value(); i_v++) {
-        for (int i_w=0; i_w<m_inPixelBinCount_w.value(); i_w++) {
-          m_chargeSharingKernels->SetKernel(i_u, i_v, i_w, m_globalKernel.value());
-        }
-      }
-    }
-  }
+  loadKernels();
 
 
   // -- Debugging Histograms --
@@ -227,8 +202,13 @@ StatusCode VTXdigi_Allpix2::initialize() {
     m_histograms.at(hist_DisplacementR).reset(
       new Gaudi::Accumulators::StaticRootHistogram<1>{this, "GlobalDisplacementR", "Displacement R (global frame): | digiHit - simHit |;dR [um]", {300, 0., 300}});
 
-    m_histograms.at(hist_HitRawChargeDifference).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<1>{this, "HitRawChargeDifference", "Hit Raw Charge Difference: #e- (digiHits, raw) - # e- (simHit);dep. charges [e-]", {5000, -5000, 5000}});
+    m_histograms.at(hist_chargeCollectionEfficiency_raw).reset(
+      new Gaudi::Accumulators::StaticRootHistogram<1>{this, "ChargeCollectionEfficiency_rawCharge", "Charge collection efficiency (raw charge, eg. before noise & threshold);# e- (digitised) / # e- (simHit)", {500, 0., 2.}});
+    
+    m_histograms.at(hist_chargeCollectionEfficiency).reset(
+      new Gaudi::Accumulators::StaticRootHistogram<1>{this, "ChargeCollectionEfficiency", "Charge collection efficiency;# e- (digitised) / # e- (simHit)", {500, 0., 2.}});
+
+    
 
     m_histograms.at(hist_pixelChargeMatrix_size_u).reset(
       new Gaudi::Accumulators::StaticRootHistogram<1>{this, "PixelChargeMatrix_Size_u", "Final Size of the Pixel Charge Matrix in u (local);pixel charge matrix size u [pix]", {100, -0.5, 99.5}});
@@ -260,22 +240,6 @@ StatusCode VTXdigi_Allpix2::initialize() {
           {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)}
         }
       );
-      m_histograms2d.at(layerIndex).at(hist2d_hitMap_simHitDebug).reset(
-        new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
-          "Layer"+std::to_string(layer)+"_HitMap_simHitsDebug",
-          "SimHit Debugging Hitmap, Layer " + std::to_string(layer) + " showing hits where local w != -25 um;u [pix]; v [pix]",
-          {static_cast<unsigned int>(m_pixelCount_u.value().at(0)), -0.5, static_cast<double>(m_pixelCount_u.value().at(0)+0.5)},
-          {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)}
-        }
-      );
-      m_histograms2d.at(layerIndex).at(hist2d_hitMap_digiHitDebug).reset(
-        new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
-          "Layer"+std::to_string(layer)+"_HitMap_digiHitsDebug",
-          "DigiHit Debugging Hitmap, Layer " + std::to_string(layer) + " showing hits where local w != -25 um;u [pix]; v [pix]",
-          {static_cast<unsigned int>(m_pixelCount_u.value().at(0)), -0.5, static_cast<double>(m_pixelCount_u.value().at(0)+0.5)},
-          {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)}
-        }
-      );
       m_histograms2d.at(layerIndex).at(hist2d_pathLength_vs_simHit_v).reset(
         new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
           "Layer"+std::to_string(layer)+"_TrackLength_vs_simHit_v",
@@ -285,7 +249,7 @@ StatusCode VTXdigi_Allpix2::initialize() {
         
         }
       );
-      m_histograms2d.at(layerIndex).at(hist_pixelChargeMatrixSize).reset(
+      m_histograms2d.at(layerIndex).at(hist2d_pixelChargeMatrixSize).reset(
         new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
           "Layer"+std::to_string(layer)+"_PixelChargeMatrixSize",
           "Pixel Charge Matrix Size, Layer " + std::to_string(layer) + ";u [pix];v [pix]",
@@ -293,6 +257,16 @@ StatusCode VTXdigi_Allpix2::initialize() {
           {100, -0.5, 99.5}
         }
       );
+      m_histograms2d.at(layerIndex).at(hist2d_pathAngleToSensorNormal).reset(
+        new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
+          "Layer"+std::to_string(layer)+"_PathAngleToSensorNormal",
+          "Path Angle to Sensor Normal Vector, Layer " + std::to_string(layer) + ";d_theta [deg];d_phi [deg]",
+          {360, -180., 180.},
+          {360, -180., 180.}
+        }
+      );
+      
+
 
 
       m_histWeighted2d.at(layerIndex).at(histWeighted2d_averageCluster_rawCharge).reset(
@@ -322,6 +296,8 @@ StatusCode VTXdigi_Allpix2::initialize() {
       );
     }
   } // if debug histograms
+
+
 
   // -- Debugging CSV output --
   if (!m_debugCsvFileName.value().empty()) {
@@ -788,7 +764,8 @@ void VTXdigi_Allpix2::FillDebugHistograms(const HitInfo& hitInfo, const HitPosit
   ++(*m_histograms.at(hist_EntryPointZ))[hitPos.entry.z()*1000]; // convert mm to um
   ++(*m_histograms.at(hist_pathLength))[hitPos.path.r()*1000]; // convert mm to um
   ++(*m_histograms.at(hist_pathLengthGeant4))[hitInfo.simPathLength()*1000]; // convert mm to um
-  ++(*m_histograms.at(hist_HitRawChargeDifference))[ pixelChargeMatrix.GetTotalRawCharge() - hitInfo.charge()]; // in e-, only if at least one pixel fired
+  ++(*m_histograms.at(hist_chargeCollectionEfficiency_raw))[ pixelChargeMatrix.GetTotalRawCharge() / hitInfo.charge() ]; // in e-, only if at least one pixel fired
+  ++(*m_histograms.at(hist_chargeCollectionEfficiency))[ pixelChargeMatrix.GetTotalMeasuredCharge(m_pixelThreshold) / hitInfo.charge()];
   
   int pix_u, pix_v;
   std::tie(pix_u, pix_v) = computePixelIndices(hitPos.local, hitInfo.layerIndex(), hitInfo.length(0), hitInfo.length(1));
@@ -799,18 +776,21 @@ void VTXdigi_Allpix2::FillDebugHistograms(const HitInfo& hitInfo, const HitPosit
   ++(*m_histograms.at(hist_pixelChargeMatrix_size_u))[pixelChargeMatrix.GetSize_u()];
   ++(*m_histograms.at(hist_pixelChargeMatrix_size_v))[pixelChargeMatrix.GetSize_v()];
   
-  ++(*m_histograms2d.at(hitInfo.layerIndex()).at(hist_pixelChargeMatrixSize))[{pixelChargeMatrix.GetSize_u(), pixelChargeMatrix.GetSize_v()}];
-  
-  if (hitInfo.debugFlag())
-    ++(*m_histograms2d.at(hitInfo.layerIndex()).at(hist2d_hitMap_simHitDebug))[{pix_u, pix_v}];
-  
+  ++(*m_histograms2d.at(hitInfo.layerIndex()).at(hist2d_pixelChargeMatrixSize))[{pixelChargeMatrix.GetSize_u(), pixelChargeMatrix.GetSize_v()}];
+
+  float pathAnglePhi = atan2(hitPos.path.x(), hitPos.path.z()) / 3.14159265 * 180.f; // in degrees
+  float pathAngleTheta = atan2(hitPos.path.y(), hitPos.path.z()) / 3.14159265 * 180.f; // in degrees
+  ++(*m_histograms2d.at(hitInfo.layerIndex()).at(hist2d_pathAngleToSensorNormal))[{pathAngleTheta, pathAnglePhi}];
+
   const auto& [i_u_simHit, i_v_simHit] = computePixelIndices(hitPos.local, hitInfo.layerIndex(), hitInfo.length(0), hitInfo.length(1));
   int nPixelsReceivedCharge = 0, nPixelsFired = 0;
 
   // fill in-sensor-dependent histograms (not efficient with histograms enabled, but makes code slightly faster when histograms are disabled)
 
   const float totalChargeRaw = pixelChargeMatrix.GetTotalRawCharge();
-  const float totalChargeMeasured = pixelChargeMatrix.GetTotalMeasuredCharge();
+  const float totalChargeMeasured = pixelChargeMatrix.GetTotalMeasuredCharge(m_pixelThreshold);
+
+
 
   for (int i_u = pixelChargeMatrix.GetRangeMin_u(); i_u <= pixelChargeMatrix.GetRangeMax_u(); ++i_u) {
     for (int i_v = pixelChargeMatrix.GetRangeMin_v(); i_v <= pixelChargeMatrix.GetRangeMax_v(); ++i_v) {
@@ -839,6 +819,7 @@ void VTXdigi_Allpix2::FillDebugHistograms(const HitInfo& hitInfo, const HitPosit
   }
   ++(*m_histograms.at(hist_clusterSize_raw))[static_cast<double>(nPixelsReceivedCharge)]; // cluster size = number of pixels fired per simHit
   ++(*m_histograms.at(hist_clusterSize_measured))[static_cast<double>(nPixelsFired)]; // cluster size = number of pixels fired per simHit
+
 }
 
 
@@ -1120,6 +1101,220 @@ void VTXdigi_Allpix2::appendSimHitToCsv(const HitInfo& hitInfo, const HitPositio
   return;
 }
 
-// void VTXdigi_Allpix2::loadKernelsFromFile() {
+void VTXdigi_Allpix2::loadKernels() {
+  verbose() << " - Importing charge sharing kernels..." << endmsg;
+  
+  // sanity check
+  if (m_globalKernel.value().empty() && m_kernelFileName.value().empty()) {
+    throw GaudiException("No charge sharing kernel specified! Please provide either a global kernel or a kernel file.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+  }
 
-// }
+  m_chargeSharingKernels = std::make_unique<ChargeSharingKernels>(m_inPixelBinCount_u.value(), m_inPixelBinCount_v.value(), m_inPixelBinCount_w.value(), m_kernelSize.value());
+
+  // load kernels
+  if (!m_globalKernel.value().empty()) { // use global kernel
+    debug() << " - Global kernel specified in <config>, applying this for all layers" << endmsg;
+  
+    // kernel size is checked in ChargeSharingKernel::SetAllKernels()
+    m_chargeSharingKernels->SetAllKernels(m_globalKernel.value());
+  }
+  else { // load from file
+    debug() << " - Loading kernels from file: " << m_kernelFileName.value() << endmsg;
+
+    /* Kernel file: the first 3 columns contain in-pixel bin indices j_u, j_v, j_w, in some order.
+     * The ordering of the columns is defined in m_kernelIndexColumns, need to decode this into usable indices. */
+
+    std::string binIndicesStr = m_kernelIndexColumns.value();
+    if (binIndicesStr.length() != 8)
+      throw GaudiException("Invalid kernelIndexColumns: " + binIndicesStr + ". Must be 8 characters long, to form a string like \"+u,-v,+w\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+    for (int i=0; i<3; i++) {
+      if (binIndicesStr[3*i] != '+' && binIndicesStr[3*i] != '-')
+        throw GaudiException("Invalid kernelIndexColumns: " + binIndicesStr + ". Each of the 3 entries must start with '+' or '-', to form a string like \"+u,-v,+w\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+      if (binIndicesStr[3*i+1] != 'u' && binIndicesStr[3*i+1] != 'v' && binIndicesStr[3*i+1] != 'w')
+        throw GaudiException("Invalid kernelIndexColumns: " + binIndicesStr + ". Each of the 3 entries must contain 'u', 'v' or 'w' as second character, to form a string like \"+u,-v,+w\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+    }
+    if (binIndicesStr[2] != ',' || binIndicesStr[5] != ',') 
+      throw GaudiException("Invalid kernelIndexColumns: " + binIndicesStr + ". Entries must be separated by commas, to form a string like \"+u,-v,+w\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+
+    int binIndices[3] = {0,0,0}; // binIndices[0] = column, where the j_u index is found
+    bool binsInverted[3] = {false, false, false}; // whether the bin indices are inverted (i.e. start from max index and go to 0)
+    for (int index=0; index<3; index++) {
+      const char sign = binIndicesStr[3*index];
+      if (sign == '-')
+        binsInverted[index] = true;
+
+      const char coord = binIndicesStr[3*index + 1];
+      if (coord == 'u')
+        binIndices[0] = index;
+      else if (coord == 'v')
+        binIndices[1] = index;
+      else if (coord == 'w')
+        binIndices[2] = index;
+    }
+
+    if (binIndices[0] + binIndices[1] + binIndices[2] != 3)
+      throw GaudiException("Invalid kernelIndexColumns: " + binIndicesStr + ". Each of 'u', 'v' and 'w' must be specified exactly once, to form a string like \"+u,-v,+w\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+
+    info() << " - Kernel index columns: j_u in col " << binIndices[0] << (binsInverted[0] ? " (inverted)" : "") << "   - j_v in column " << binIndices[1] << (binsInverted[1] ? " (inverted)" : "") << "   - j_w in column " << binIndices[2] << (binsInverted[2] ? " (inverted)" : "") << endmsg;
+
+    /* The following (KernelSize x KernelSize) entries contain the charge sharing kernel.
+     * The ordering of the entries is defined in m_kernelMatrixColumns, we need to decode this into usable indices as well.
+     * ChargeSharingKernels expects the entries to be in row-major order, top-to-bottom ordering.
+     * We need to re-sort the entries accordingly. */
+
+    std::string valueIndicesStr = m_kernelMatrixColumns.value();
+
+    if (valueIndicesStr.length() != 9)
+      throw GaudiException("Invalid kernelMatrixColumns: " + valueIndicesStr + ". Must be 9 characters long, to form a string like \"col,+u,-v\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+    bool rowMajor;
+    if ( std::strncmp(valueIndicesStr.substr(0,4).c_str(), "row,", 4) == 0 )
+      rowMajor = true;
+    else if ( std::strncmp(valueIndicesStr.substr(0,4).c_str(), "col,", 4) == 0 )
+      rowMajor = false;
+    else
+      throw GaudiException("Invalid kernelMatrixColumns: " + valueIndicesStr + ". Must start with \"row,\" or \"col,\" to form a string like \"row,+u,-v\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+    if (valueIndicesStr[6] != ',' )
+      throw GaudiException("Invalid kernelMatrixColumns: " + valueIndicesStr + ". Entries must be separated by commas, to form a string like \"col,+u,-v\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+    for (int i=0; i<2; i++) {
+      if (valueIndicesStr[4 + 3*i] != '+' && valueIndicesStr[4 + 3*i] != '-')
+        throw GaudiException("Invalid kernelMatrixColumns: " + valueIndicesStr + ". Each of the 2 positional entries must start with '+' or '-', to form a string like \"col,+u,-v\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+      if (valueIndicesStr[5 + 3*i] != 'u' && valueIndicesStr[5 + 3*i] != 'v')
+        throw GaudiException("Invalid kernelMatrixColumns: " + valueIndicesStr + ". Each of the 2 positional entries must contain 'u' or 'v' as second character, to form a string like \"col,+u,-v\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+    }
+
+    bool matrixAxesSwapped; // false <=> {u in horizontal, v in vertical} directions in the kernel matrix. true <=> {u in vertical, v in horizontal}
+    bool matrixAxesInverted[2]; // matrixAxesInverted[0] = false <=> horizontal axis counts left-to-right. true means right-to-left. Same for matrixAxesInverted[1] = false <=> bottom-to-top.
+    /* I feel what I do here carries redundant information.
+     * (because if u is horizontal, v must be vertical, and vice versa.)
+     * (also because if colMajor can be described by swapping u and v, and their signs)
+     * But this way the behaviour is much clearer. 
+     * It's not executed in event loop, so performace does not matter anyway ~ Jona 2025-10 */
+
+    if (valueIndicesStr[5] == 'u' && valueIndicesStr[8] == 'v')
+      matrixAxesSwapped = false;
+    else if (valueIndicesStr[5] == 'v' && valueIndicesStr[8] == 'u')
+      matrixAxesSwapped = true;
+    else
+      throw GaudiException("Invalid kernelMatrixColumns: " + valueIndicesStr + ". Each of 'u' and 'v' must be specified exactly once, to form a string like \"col,+u,-v\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+
+    if (valueIndicesStr[4] == '+')
+      matrixAxesInverted[0] = false;
+    else if (valueIndicesStr[4] == '-')
+      matrixAxesInverted[0] = true;
+    else
+      throw GaudiException("Invalid kernelMatrixColumns: " + valueIndicesStr + ". Each of the 2 positional entries must start with '+' or '-', to form a string like \"col,+u,-v\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE); 
+
+    if (valueIndicesStr[7] == '+')  
+      matrixAxesInverted[1] = false;
+    else if (valueIndicesStr[7] == '-')
+      matrixAxesInverted[1] = true;
+    else
+      throw GaudiException("Invalid kernelMatrixColumns: " + valueIndicesStr + ". Each of the 2 positional entries must start with '+' or '-', to form a string like \"col,+u,-v\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+
+    std::vector<int> valueIndices(m_kernelSize*m_kernelSize, 0.); // valueIndices[i] = column where the i-th kernel entry is found, in the order expected by ChargeSharingKernels
+
+    for (int i = 0; i < m_kernelSize*m_kernelSize; i++) {
+      int i_u, i_v;
+      if (matrixAxesSwapped) {
+        i_u = i/m_kernelSize;
+        i_v = i%m_kernelSize ;
+      }
+      else {
+        i_u = i%m_kernelSize;
+        i_v = i/m_kernelSize;
+      }
+
+      if (matrixAxesInverted[0]) 
+        i_u = m_kernelSize - 1 - i_u;
+      if (!matrixAxesInverted[1]) // vertical axis is counted bottom-to-top by default, so invert if necessary
+        i_v = m_kernelSize - 1 - i_v;
+
+      if (rowMajor)
+        valueIndices[i] = i_u + m_kernelSize * i_v;
+      else
+        valueIndices[i] = i_v + m_kernelSize * i_u;
+    } // loop over kernel entries,  set entries
+
+    std::string debugValueIndices;
+    for (const auto& index : valueIndices)
+      debugValueIndices += std::to_string(index) + " ";
+    info() << " - Kernel matrix value columns set:" << endmsg;
+    info() << "   - " << debugValueIndices << endmsg;
+
+    // -- finally, load the kernels from file --
+
+    info() << " - Opening kernel file: " << m_kernelFileName.value() << endmsg;
+    std::ifstream kernelFile(m_kernelFileName.value());
+    if (!kernelFile.is_open())
+      throw GaudiException("Could not open kernel file: " + m_kernelFileName.value(), "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+
+    std::string line;
+    int lineNumber = 0;
+    float kernelsSum = 0.f;
+
+    while (std::getline(kernelFile, line)) {
+
+      // skip header lines
+      if (lineNumber < m_kernelSkipLines.value()) {
+        lineNumber++;
+        continue;
+      }
+
+      if (line.empty() || line[0] == '#')
+        throw GaudiException("Empty or comment line found in kernel file at line " + std::to_string(lineNumber) + ". All lines after header must contain valid kernel data.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+      
+      std::istringstream stringstream(line);
+      std::string entry;
+      std::vector<std::string> lineEntries;
+      int nEntries = 0;
+
+      while (std::getline(stringstream, entry, ' ')) {
+        if (!entry.empty()) {
+          lineEntries.push_back(entry);
+        }
+        nEntries++;
+      }
+
+      if (nEntries != 3 + m_kernelSize * m_kernelSize)
+        throw GaudiException("Invalid number of entries in kernel file at line " + std::to_string(lineNumber) + ": found " + std::to_string(nEntries) + " entries, expected " + std::to_string(3 + m_kernelSize * m_kernelSize) + " = 3 indices + kernelSize^2.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+ 
+      int j_u = std::stoi(lineEntries[binIndices[0]]) - 1; // Allpix2 indices start from 1
+      int j_v = std::stoi(lineEntries[binIndices[1]]) - 1;
+      int j_w = std::stoi(lineEntries[binIndices[2]]) - 1;
+      if (binsInverted[0])
+        j_u = m_inPixelBinCount_u.value() - 1 - j_u;
+      if (binsInverted[1])
+        j_v = m_inPixelBinCount_v.value() - 1 - j_v;
+      if (binsInverted[2])
+        j_w = m_inPixelBinCount_w.value() - 1 - j_w;
+
+      std::vector<float> kernelValues(m_kernelSize*m_kernelSize, 0.);
+      float kernelValueSum = 0.f;
+      for (int i = 0; i < m_kernelSize*m_kernelSize; i++) {
+        int valueIndex = valueIndices[i];
+        kernelValues[i] = std::stof(lineEntries[3 + valueIndex]);
+        kernelValueSum += kernelValues[i];
+      }
+      // normalize kernel
+      if (std::isnan(kernelValueSum))
+        throw GaudiException("NaN encountered in kernel for in-pixel bin (" + std::to_string(j_u) + ", " + std::to_string(j_v) + ", " + std::to_string(j_w) + ") at line " + std::to_string(lineNumber) + " in kernel file.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+      if (kernelValueSum < 0.f || kernelValueSum > 1.f + m_numericLimit_float) {
+        warning() << " - Kernel for in-pixel bin (" << j_u << ", " << j_v << ", " << j_w << ") has invalid sum (" << kernelValueSum << ", must be in [0, 1]). Normalising to 1." << endmsg;
+        for (auto& value : kernelValues)
+          value /= kernelValueSum;
+      }
+      kernelsSum += kernelValueSum;
+
+      debug() << " - Loaded kernel for in-pixel bin (" << j_u << ", " << j_v << ", " << j_w << ") with entry sum " << kernelValueSum << ", setting it now." << endmsg;
+      m_chargeSharingKernels->SetKernel(j_u, j_v, j_w, kernelValues);
+      
+      lineNumber++;
+    } // loop over lines in file
+
+    if (lineNumber - m_kernelSkipLines != m_inPixelBinCount_u.value() * m_inPixelBinCount_v.value() * m_inPixelBinCount_w.value()) 
+      throw GaudiException("Invalid number of kernels loaded from file: expected " + std::to_string(m_inPixelBinCount_u.value() * m_inPixelBinCount_v.value() * m_inPixelBinCount_w.value()) + " from InPixelBinCount = [" + std::to_string(m_inPixelBinCount_u.value()) + ", " + std::to_string(m_inPixelBinCount_v.value()) + ", " + std::to_string(m_inPixelBinCount_w.value()) + "], but got " + std::to_string(lineNumber - m_kernelSkipLines.value()) + ".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+
+    kernelsSum /= static_cast<float>(lineNumber - m_kernelSkipLines);
+    info() << " - Loaded " << (lineNumber - m_kernelSkipLines) << " kernels from file. " << kernelsSum*100 << " percent of charge deposited in the sensor volume is collected by the pixels (the rest is lost, eg. due to being outside of depletion or due to trapping)." << endmsg;
+  } // if load from file
+}
