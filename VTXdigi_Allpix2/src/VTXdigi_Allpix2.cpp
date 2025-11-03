@@ -35,292 +35,36 @@ VTXdigi_Allpix2::VTXdigi_Allpix2(const std::string& name, ISvcLocator* svcLoc)
 }
 
 StatusCode VTXdigi_Allpix2::initialize() {
-  // i think this is executed after the Gaudi properties are loaded (different to the constructor, where they are not necessarily loaded yet). ~ Jona 2025-09
   info() << "INITIALIZING ..." << endmsg;
 
-  m_uidSvc = service<IUniqueIDGenSvc>("UniqueIDGenSvc", true);
-  if (!m_uidSvc) {
-    error() << "Unable to get UniqueIDGenSvc" << endmsg;
-  }  
+  initializeServicesAndGeometry();
 
-  m_geometryService = serviceLocator()->service(m_geometryServiceName);
-  if (!m_geometryService) {
-    error() << "Unable to retrieve the GeoSvc. Abort." << endmsg;
-    return StatusCode::FAILURE;
-  }
+  checkGaudiProperties();
   
-  std::string cellIDstr = m_geometryService->constantAsString(m_encodingStringVariable.value());
-  m_cellIDdecoder = std::make_unique<dd4hep::DDSegmentation::BitFieldCoder>(cellIDstr);
-  if (!m_cellIDdecoder) {
-    error() << "Unable to retrieve the cellID decoder. Abort." << endmsg;
-    return StatusCode::FAILURE;
-  }
-  
-  const dd4hep::Detector* detector = m_geometryService->getDetector();
-  if (!detector) {
-    error() << " - Unable to retrieve the DD4hep detector from GeoSvc. Abort." << endmsg;
-    return StatusCode::FAILURE;
-  }
-  
-  const dd4hep::rec::SurfaceManager* simSurfaceManager = detector->extension<dd4hep::rec::SurfaceManager>();
-  if (!simSurfaceManager) {
-    error() << " - Unable to retrieve the SurfaceManager from the DD4hep detector. Abort." << endmsg;
-    return StatusCode::FAILURE;
-  }
-  
-  m_simSurfaceMap = simSurfaceManager->map(m_subDetName.value());
-  if (!m_simSurfaceMap) {
-    error() << " - Unable to retrieve the simSurface map for subdetector " << m_subDetName.value() << ". Abort." << endmsg;
-    return StatusCode::FAILURE;
-  }
-  
-  m_volumeManager = detector->volumeManager();
-  if (!m_volumeManager.isValid()) {
-    error() << " - Unable to retrieve the VolumeManager from the DD4hep detector. Abort." << endmsg;
-    return StatusCode::FAILURE;
-  }
-
-  /* subDetector not needed as of now. Keep for future reference ~ Jona 2025-10 */
-  // const dd4hep::DetElement subDetector = detector->detector(m_subDetName.value());
-  // if (!subDetector.isValid()) {
-  //   error() << " - Unable to retrieve the DetElement for subdetector " << m_subDetName.value() << ". Abort." << endmsg;
-  //   return StatusCode::FAILURE;
-  // }
-
-
-  debug() << " - Successfully retrieved all necessary services and detector elements, starting to check Gaudi properties." << endmsg;
-
-  // check some config parameters
-  if (m_maxClusterSize.value().size() != 2) {
-    error() << "Property MaximumClusterSize must contain exactly two entries: [max in u, max in v]. Abort." << endmsg;
-    return StatusCode::FAILURE;
-  }
-  for (int i = 0; i < 2; ++i) {
-    if (m_maxClusterSize.value().at(i) < 1) {
-      error() << "Property MaximumClusterSize entries must be >= 1. Abort." << endmsg;
-      return StatusCode::FAILURE;
-    }
-    if ((m_maxClusterSize.value().at(i)-1) % 2 != 0) {
-      error() << "Property MaximumClusterSize entries must be odd numbers. Abort." << endmsg;
-      return StatusCode::FAILURE;
-    }
-  }
-
-  /* pixel pitch and count are given as either
+  /* Sensor parameters are given as either
   *  - a single value, which is then applied to all layers
   *    -> rewrite the vector to contain the same value for all layers (simplifies code later)
-  *  - a vector of values, one per layer
+  *  - a vector of values, one per layer (for each layer that will be digitized)
   *    -> check that the number of entries matches the number of layers in the geometry
-  */ 
+  * Need to create a layer index mapping as well, to map from layer number (from cellID) to index in the sensor parameter vectors (to access the correct sensor parameters for each layer). */ 
+  setupSensorParameters();
 
-  // check that m_layersToDigitize is consistent with m_layerCount
-  if (!m_layersToDigitize.empty()) {
-    if (m_layersToDigitize.size() != static_cast<size_t>(m_layerCount.value())) {
-      error() << "LayersToDigitize size does not match LayerCount. Abort. (LayersToDigitize is optional, set [] to digitize all layers)" << endmsg;
-      return StatusCode::FAILURE;
-    }
-  }
-
-  // create layer number to internal index map
-  m_layerToIndex.clear();
-  for (size_t layerIndex = 0; layerIndex < m_layersToDigitize.size(); layerIndex++) {
-    int layer = m_layersToDigitize.value().at(layerIndex);
-    m_layerToIndex.insert({layer, static_cast<int>(layerIndex)});
-  }
-  verbose() << " - Digitizing the following layers: " << endmsg;
-  for (const auto& [layer, index] : m_layerToIndex) {
-    verbose() << "   - Layer " << layer << " (index " << index << ")" << endmsg;
-  }
-
-  if (m_pixelPitch_u.value().size() == 1 && m_pixelPitch_v.value().size() == 1 && m_pixelCount_u.value().size() == 1 && m_pixelCount_v.value().size() == 1 && m_sensorThickness.value().size() == 1) {
-    // single value for all layers, rewrite to vector of correct size
-    m_pixelPitch_u.value().resize(m_layerCount, m_pixelPitch_u.value().at(0));
-    m_pixelPitch_v.value().resize(m_layerCount, m_pixelPitch_v.value().at(0));
-    m_pixelCount_u.value().resize(m_layerCount, m_pixelCount_u.value().at(0));
-    m_pixelCount_v.value().resize(m_layerCount, m_pixelCount_v.value().at(0));
-    m_sensorThickness.value().resize(m_layerCount, m_sensorThickness.value().at(0));
-    verbose() << " - found single values for pixel pitch and pixel count, applying them to all layers" << endmsg;
-  }
-  else if (m_pixelPitch_u.value().size() == m_layerCount && m_pixelPitch_v.value().size() == m_layerCount && m_pixelCount_u.value().size() == m_layerCount && m_pixelCount_v.value().size() == m_layerCount && m_sensorThickness.value().size() == m_layerCount) {
-      // one entry per layer
-      verbose() << " - found pixel pitch and pixel count values for all " << m_layerCount << " layers" << endmsg;
-    }
-  else {
-    error() << "Pixel pitch and count, and sensor thickness must be given either as a single value for all layers (in brackets though: []) or as a vector with one entry per layer. Abort." << endmsg;
-    return StatusCode::FAILURE;
-  }
-
+  loadKernels(); // also sets m_pixelPitch_u, m_pixelPitch_v, m_sensorThickness based on kernel file header. this needs to be updated if different sensor types are used across layers
+  
   verbose() << " - Using the following sensor parameters for each layer:" << endmsg;
   for (const auto& [layer, index] : m_layerToIndex) {
-    verbose() << "   - Layer " << layer << " (index " << index << "): pitch_u = " << m_pixelPitch_u.value().at(index) << " mm, pitch_v = " << m_pixelPitch_v.value().at(index) << " mm, count_u = " << m_pixelCount_u.value().at(index) << ", count_v = " << m_pixelCount_v.value().at(index) << ", thickness = " << m_sensorThickness.value().at(index) << " mm" << endmsg;
+    verbose() << "   - Layer " << layer << " (index " << index << "): pitch_u = " << m_pixelPitch_u.at(index) << " mm, pitch_v = " << m_pixelPitch_v.at(index) << " mm, count_u = " << m_pixelCount_u.value().at(index) << ", count_v = " << m_pixelCount_v.value().at(index) << ", thickness = " << m_sensorThickness.at(index) << " mm" << endmsg;
   }
 
-  // load charge sharing kernels
+  if (m_debugHistograms.value())
+    setupDebugHistograms();
 
-  loadKernels();
+  if (!m_debugCsvFileName.value().empty())
+    setupDebugCsvOutput();
 
-
-  // -- Debugging Histograms --
-
-  if (m_debugHistograms.value()) {
-
-    error() << " - You enabled creating debug histograms by setting `DebugHistograms = True`. This is NOT MULTITHREADING SAFE and will cause crashes if multithreading is used." << endmsg;
-    verbose () << " - Creating debug histograms ..." << endmsg;
-
-    // -- 1D Histograms --
-
-    m_histograms.at(hist_simHitE).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<1>{this, 
-        "simHitE", "SimHit Energy;keV", 
-        {1000, 0, m_sensorThickness.value().at(0)*2000}}); 
-    m_histograms.at(hist_simHitCharge).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<1>{this,
-        "simHitCharge", "SimHit Raw Charge;dep. charges [e-]",
-        {1000, 0, m_sensorThickness.value().at(0)*500000}});
-
-    m_histograms.at(hist_clusterSize_raw).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<1>{this, "ClusterSize_Raw", "Cluster Size of Raw Charges (ie. number of pixels that receive any charge from this simHit);Cluster size [pix]", {50, -0.5, 49.5}});
-    m_histograms.at(hist_clusterSize_measured).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<1>{this, "ClusterSize_Measured", "Cluster Size of Measured Charges (ie. number of pixels that are above threshold due to the simHit's deposited charge);Cluster size [pix]", {50, -0.5, 49.5}});
-
-    m_histograms.at(hist_pathLength).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<1>{this, "PathLength", "Path Length in Sensor Active Volume;Path length [um]", {500, 0., m_sensorThickness.value().at(0)*10*1000}}); // in um, max 10x sensor thickness (for very shallow angles)
-    m_histograms.at(hist_pathLengthGeant4).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<1>{this, "PathLength-Geant4", "Path Length in Sensor Active Volume\nAs Given by Geant4;Path length [um]", {500, 0., m_sensorThickness.value().at(0)*10*1000}}); // in um, max 10x sensor thickness (for very shallow angles)
-
-    m_histograms.at(hist_EntryPointX).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<1>{this, "EntryPointX", "SimHit Entry Point U (in local sensor frame);u [mm]", {400, -4, 4}});
-    m_histograms.at(hist_EntryPointY).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<1>{this, "EntryPointY", "SimHit Entry Point V (in local sensor frame);v [mm]", {2000, -20, 20}});
-    m_histograms.at(hist_EntryPointZ).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<1>{this, "EntryPointZ", "SimHit Entry Point W (in local sensor frame);w [mm]", {1000, -300, 300}});
-
-    m_histograms.at(hist_DisplacementU).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<1>{this, "LocalDisplacementU", "Displacement U (local sensor frame): digiHit_u - simHit_u;dU [um]", {800, -200, 200}});
-    m_histograms.at(hist_DisplacementV).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<1>{this, "LocalDisplacementV", "Displacement V (local sensor frame): digiHit_v - simHit_v;dV [um]", {800, -200, 200}});
-    m_histograms.at(hist_DisplacementR).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<1>{this, "GlobalDisplacementR", "Displacement R (global frame): | digiHit - simHit |;dR [um]", {300, 0., 300}});
-
-    m_histograms.at(hist_chargeCollectionEfficiency_raw).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<1>{this, "ChargeCollectionEfficiency_rawCharge", "Charge collection efficiency (raw charge, eg. before noise & threshold);# e- (digitised) / # e- (simHit)", {500, 0., 2.}});
-    
-    m_histograms.at(hist_chargeCollectionEfficiency).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<1>{this, "ChargeCollectionEfficiency", "Charge collection efficiency;# e- (digitised) / # e- (simHit)", {500, 0., 2.}});
-
-    
-
-    m_histograms.at(hist_pixelChargeMatrix_size_u).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<1>{this, "PixelChargeMatrix_Size_u", "Final Size of the Pixel Charge Matrix in u (local);pixel charge matrix size u [pix]", {100, -0.5, 99.5}});
-    m_histograms.at(hist_pixelChargeMatrix_size_v).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<1>{this, "PixelChargeMatrix_Size_v", "Final Size of the Pixel Charge Matrix in v (local);pixel charge matrix size v [pix]", {100, -0.5, 99.5}});
-
-    // -- 2D Histograms --
-
-    m_histograms2d.resize(m_layersToDigitize.size()); // resize vector to hold all histograms
-    m_histWeighted2d.resize(m_layersToDigitize.size());
-
-    for (int layer : m_layersToDigitize) {
-      int layerIndex = m_layerToIndex.at(layer);
-      verbose () << " - Creating 2D histograms for layer " << layer << " (index " << layerIndex << ")" << endmsg;
-
-      m_histograms2d.at(layerIndex).at(hist2d_hitMap_simHits).reset(
-        new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
-          "Layer"+std::to_string(layer)+"_HitMap_simHits",
-          "SimHit Hitmap, Layer " + std::to_string(layer) + ";u [pix]; v [pix]",
-          {static_cast<unsigned int>(m_pixelCount_u.value().at(0)), -0.5, static_cast<double>(m_pixelCount_u.value().at(0)+0.5)},
-          {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)}
-        }
-      );
-      m_histograms2d.at(layerIndex).at(hist2d_hitMap_digiHits).reset(
-        new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
-          "Layer"+std::to_string(layer)+"_HitMap_digiHits",
-          "DigiHit Hitmap, Layer " + std::to_string(layer) + ";u [pix]; v [pix]",
-          {static_cast<unsigned int>(m_pixelCount_u.value().at(0)), -0.5, static_cast<double>(m_pixelCount_u.value().at(0)+0.5)},
-          {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)}
-        }
-      );
-      m_histograms2d.at(layerIndex).at(hist2d_pathLength_vs_simHit_v).reset(
-        new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
-          "Layer"+std::to_string(layer)+"_TrackLength_vs_simHit_v",
-          "Track Length in Sensor Active Volume vs. SimHit v position (local), Layer " + std::to_string(layer) + ";SimHit v [pix];Track length [um]",
-            {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)},
-          {200, 0., 10*m_sensorThickness.value().at(layerIndex)*1000}, // in um
-        
-        }
-      );
-      m_histograms2d.at(layerIndex).at(hist2d_pixelChargeMatrixSize).reset(
-        new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
-          "Layer"+std::to_string(layer)+"_PixelChargeMatrixSize",
-          "Pixel Charge Matrix Size, Layer " + std::to_string(layer) + ";u [pix];v [pix]",
-          {100, -0.5, 99.5},
-          {100, -0.5, 99.5}
-        }
-      );
-      m_histograms2d.at(layerIndex).at(hist2d_pathAngleToSensorNormal).reset(
-        new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
-          "Layer"+std::to_string(layer)+"_PathAngleToSensorNormal",
-          "Path Angle to Sensor Normal Vector, Layer " + std::to_string(layer) + ";d_theta [deg];d_phi [deg]",
-          {360, -180., 180.},
-          {360, -180., 180.}
-        }
-      );
-      
-
-
-
-      m_histWeighted2d.at(layerIndex).at(histWeighted2d_averageCluster_rawCharge).reset(
-        new Gaudi::Accumulators::StaticWeightedHistogram<2, Gaudi::Accumulators::atomicity::full, double>{this,
-          "Layer"+std::to_string(layer)+"_AverageCluster_rawCharge",
-          "Average Cluster Shape, without Threshold & Noise, Layer " + std::to_string(layer) + "(charge per hit normalised to 1);u [pix]; v [pix]",
-          {static_cast<unsigned int>(m_maxClusterSize.value().at(0)),
-            -static_cast<double>(m_maxClusterSize.value().at(0))/2,
-            static_cast<double>(m_maxClusterSize.value().at(0))/2},
-          {static_cast<unsigned int>(m_maxClusterSize.value().at(1)),
-            -static_cast<double>(m_maxClusterSize.value().at(1))/2,
-            static_cast<double>(m_maxClusterSize.value().at(1))/2}
-        }
-      );
-
-      m_histWeighted2d.at(layerIndex).at(histWeighted2d_averageCluster_measuredCharge).reset(
-        new Gaudi::Accumulators::StaticWeightedHistogram<2, Gaudi::Accumulators::atomicity::full, double>{this,
-          "Layer"+std::to_string(layer)+"_AverageCluster_measuredCharge",
-          "Average Cluster Shape, after applying Threshold & Noise, Layer " + std::to_string(layer) + "(charge per hit normalised to 1);u [pix]; v [pix]",
-          {static_cast<unsigned int>(m_maxClusterSize.value().at(0)),
-            -static_cast<double>(m_maxClusterSize.value().at(0))/2,
-            static_cast<double>(m_maxClusterSize.value().at(0))/2},
-          {static_cast<unsigned int>(m_maxClusterSize.value().at(1)),
-            -static_cast<double>(m_maxClusterSize.value().at(1))/2,
-            static_cast<double>(m_maxClusterSize.value().at(1))/2}
-        }
-      );
-    }
-  } // if debug histograms
-
-
-
-  // -- Debugging CSV output --
-  if (!m_debugCsvFileName.value().empty()) {
-    m_debugCsv = true;
-
-    error() << " - You enabled the CSV output by setting `DebugCsvFileName` to a path. This is NOT MULTITHREADING SAFE and will cause crashes if multithreading is used." << endmsg;
-    m_debugCsvFile.open(m_debugCsvFileName.value());
-
-    if (!m_debugCsvFile.is_open()) {
-      throw GaudiException("Failed to open debug CSV file", "VTXdigi_Allpix2::initialize", StatusCode::FAILURE);
-    } else {
-      m_debugCsvFile << "eventNumber,layerIndex,segmentCount,sensorThickness,pix_u,pix_v,simHitPos_u,simHitPos_v,simHitPos_w,simHitEntryPos_u,simHitEntryPos_v,simHitEntryPos_w,simHitPath_u,simHitPath_v,simHitPath_w,pathLengthGeant4,pathLength,rawChargeDeposition,debugFlag\n";
-      m_debugCsvFile.flush();
-      debug() << "   - writing to file: " << m_debugCsvFileName.value() << endmsg;
-    }
-  } else { 
-    m_debugCsv = false;
-    verbose() << " - Debug CSV output disabled" << endmsg;
-  }
-
-  // TODO: check that pixel pitch and count match sensor size in geometry (I am not sure how to get the sensor size from the geometry though, does seem to be a bit more general, subDetectors have children that might or might not be layers) ~ Jona 2025-09
-  // TODO load lookup table for charge transport and diffusion
-  // TODO check that k4geo has same pitch as lookup table 
+  /* TODO: check that pixel pitch and count match sensor size in geometry (I am not sure how to get the sensor size from the geometry though, does seem to be a bit more general, subDetectors have children that might or might not be layers). this is currently done for every event, but could be done in the initialization phase, which is of course far more efficient ~ Jona 2025-09
+   *  TODO load lookup table for charge transport and diffusion
+   *  TODO check that k4geo has same pitch as lookup table */
   info() << " - Initialized successfully" << endmsg;
   return StatusCode::SUCCESS;
 }
@@ -333,52 +77,14 @@ StatusCode VTXdigi_Allpix2::finalize() {
     verbose() << " - Closed debug CSV file" << endmsg;
   }
 
-  const int colWidths[] = {65, 10};  
-  info() << " Counters summary: " << endmsg;
-  info() << " | " << std::setw(colWidths[0]) << std::left << "Events read"
-         << " | " << std::setw(colWidths[1]) << std::right << m_counter_eventsRead.value() << " |" << endmsg;
-  info() << " | " << std::setw(colWidths[0]) << std::left << "Events rejected (no simHits)"
-         << " | " << std::setw(colWidths[1]) << std::right << m_counter_eventsRejected_noSimHits.value() << " |" << endmsg;
-  info() << " | " << std::setw(colWidths[0]) << std::left << "Events accepted"
-         << " | " << std::setw(colWidths[1]) << std::right << m_counter_eventsAccepted.value() << " |" << endmsg;
-  if (m_counter_eventsRead.value() != m_counter_eventsRejected_noSimHits.value() + m_counter_eventsAccepted.value())
-    warning() << " | Number of accepted and rejected events does not add up to total number of processed events!" << endmsg;
-  else info() << " | - event numbers add up." << endmsg;
-  
-  info() << " | " << std::setw(colWidths[0]) << std::left << "Simhits read"
-         << " | " << std::setw(colWidths[1]) << std::right << m_counter_simHitsRead.value() << " |" << endmsg;
-  info() << " | " << std::setw(colWidths[0]) << std::left << "Simhits rejected (in layer not to be digitized)"
-         << " | " << std::setw(colWidths[1]) << std::right << m_counter_simHitsRejected_LayerNotToBeDigitized.value() << " |" << endmsg;
-  info() << " | " << std::setw(colWidths[0]) << std::left << "Simhits rejected (below charge cut)"
-         << " | " << std::setw(colWidths[1]) << std::right << m_counter_simHitsRejected_ChargeCut.value() << " |" << endmsg;
-  info() << " | " << std::setw(colWidths[0]) << std::left << "Simhits rejected (surface distance too large)"
-         << " | " << std::setw(colWidths[1]) << std::right << m_counter_simHitsRejected_SurfaceDistToLarge.value() << " |" << endmsg;
-  info() << " | " << std::setw(colWidths[0]) << std::left << "Simhits rejected (outside sensor)"
-         << " | " << std::setw(colWidths[1]) << std::right << m_counter_simHitsRejected_OutsideSensor.value() << " |" << endmsg;
-  info() << " | " << std::setw(colWidths[0]) << std::left << "Simhits accepted"
-         << " | " << std::setw(colWidths[1]) << std::right << m_counter_simHitsAccepted.value() << " |" << endmsg;
-  const long int simHitsRejected = (
-    m_counter_simHitsRejected_LayerNotToBeDigitized.value() + 
-    m_counter_simHitsRejected_ChargeCut.value() + 
-    m_counter_simHitsRejected_SurfaceDistToLarge.value() + 
-    m_counter_simHitsRejected_OutsideSensor.value() );
-  if (m_counter_simHitsRead.value() != simHitsRejected + m_counter_simHitsAccepted.value())
-    warning() << " | Number of accepted and rejected simHits does not add up to total number of processed simHits!" << endmsg;
-  else info() << " | - simHit numbers add up." << endmsg;
-
-  info() << " | " << std::setw(colWidths[0]) << std::left << "Calculated path did not pass through the sensor active volume"
-         << " | " << std::setw(colWidths[1]) << std::right << m_counter_acceptedButNoSegmentsInSensor.value() << " |" << endmsg;
-  info() << " | " << std::setw(colWidths[0]) << std::left << "DigiHits created"
-         << " | " << std::setw(colWidths[1]) << std::right << m_counter_digiHitsCreated.value() << " |" << endmsg;
-  
-
+  printCountersSummary();
 
   verbose() << " - finalized successfully" << endmsg;
   return StatusCode::SUCCESS;
 } 
 
 
-// -- event loop -- 
+/* -- event loop -- */
 
 std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> VTXdigi_Allpix2::operator()
   (const edm4hep::SimTrackerHitCollection& simHits, const edm4hep::EventHeaderCollection& headers) const {
@@ -447,7 +153,466 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
 } // operator()
 
 
-// -- Core algorithm functions -- 
+/* -- Initialization / finalization functions -- */
+
+void VTXdigi_Allpix2::initializeServicesAndGeometry() {
+  m_uidSvc = service<IUniqueIDGenSvc>("UniqueIDGenSvc", true);
+  if (!m_uidSvc)
+    throw GaudiException("Unable to get UniqueIDGenSvc", "VTXdigi_Allpix2::initializeServicesAndGeometry()", StatusCode::FAILURE);
+
+  m_geometryService = serviceLocator()->service(m_geometryServiceName);
+  if (!m_geometryService)
+    throw GaudiException("Unable to retrieve the GeoSvc", "VTXdigi_Allpix2::initializeServicesAndGeometry()", StatusCode::FAILURE);
+  
+  std::string cellIDstr = m_geometryService->constantAsString(m_encodingStringVariable.value());
+  m_cellIDdecoder = std::make_unique<dd4hep::DDSegmentation::BitFieldCoder>(cellIDstr);
+  if (!m_cellIDdecoder)
+    throw GaudiException("Unable to retrieve the cellID decoder", "VTXdigi_Allpix2::initializeServicesAndGeometry()", StatusCode::FAILURE);
+  
+  const dd4hep::Detector* detector = m_geometryService->getDetector();
+  if (!detector)
+    throw GaudiException("Unable to retrieve the DD4hep detector from GeoSvc", "VTXdigi_Allpix2::initializeServicesAndGeometry()", StatusCode::FAILURE);
+  
+  const dd4hep::rec::SurfaceManager* simSurfaceManager = detector->extension<dd4hep::rec::SurfaceManager>();
+  if (!simSurfaceManager)
+    throw GaudiException("Unable to retrieve the SurfaceManager from the DD4hep detector", "VTXdigi_Allpix2::initializeServicesAndGeometry()", StatusCode::FAILURE);
+  
+  m_simSurfaceMap = simSurfaceManager->map(m_subDetName.value());
+  if (!m_simSurfaceMap)
+    throw GaudiException("Unable to retrieve the simSurface map for subdetector " + m_subDetName.value(), "VTXdigi_Allpix2::initializeServicesAndGeometry()", StatusCode::FAILURE);
+
+  m_volumeManager = detector->volumeManager();
+  if (!m_volumeManager.isValid())
+    throw GaudiException("Unable to retrieve the VolumeManager from the DD4hep detector", "VTXdigi_Allpix2::initializeServicesAndGeometry()", StatusCode::FAILURE);
+
+  /* subDetector not needed as of now. Keep for future reference ~ Jona 2025-10 */
+  // const dd4hep::DetElement subDetector = detector->detector(m_subDetName.value());
+  // if (!subDetector.isValid())
+  //   throw GaudiException("Unable to retrieve the DetElement for subdetector " + m_subDetName.value(), "VTXdigi_Allpix2::initializeServicesAndGeometry()", StatusCode::FAILURE);
+
+  debug() << " - Successfully retrieved all necessary services and detector elements, starting to check Gaudi properties." << endmsg;
+}
+
+void VTXdigi_Allpix2::checkGaudiProperties() {
+  if (m_subDetName.value() == m_undefinedString)
+    throw GaudiException("Property SubDetectorName is not set!", "VTXdigi_Allpix2::checkGaudiProperties()", StatusCode::FAILURE);
+
+  if (m_pixelCount_u.value().empty())
+    throw GaudiException("Property PixelCount_u is not set! Give either a single value \"[<value>]\" or one per layer.", "VTXdigi_Allpix2::checkGaudiProperties()", StatusCode::FAILURE);
+  if (m_pixelCount_v.value().empty())
+    throw GaudiException("Property PixelCount_v is not set! Give either a single value \"[<value>]\" or one per layer.", "VTXdigi_Allpix2::checkGaudiProperties()", StatusCode::FAILURE);
+
+  if (m_maxClusterSize.value().size() != 2) 
+    throw GaudiException("Property MaximumClusterSize must have exactly 2 entries (u and v).", "VTXdigi_Allpix2::checkGaudiProperties()", StatusCode::FAILURE);
+  for (int i = 0; i < 2; ++i) {
+    if (m_maxClusterSize.value().at(i) < 1) 
+      throw GaudiException("Property MaximumClusterSize entries must be positive odd numbers.", "VTXdigi_Allpix2::checkGaudiProperties()", StatusCode::FAILURE);
+    if ((m_maxClusterSize.value().at(i)-1) % 2 != 0) 
+      throw GaudiException("Property MaximumClusterSize entries must be positive odd numbers.", "VTXdigi_Allpix2::checkGaudiProperties()", StatusCode::FAILURE);
+  }
+
+  if (m_globalKernel.value().size() > 0 && m_kernelFileName.value().length() > 0)
+    throw GaudiException("Please provide either a global kernel or a kernel file, not both!", "VTXdigi_Allpix2::checkGaudiProperties()", StatusCode::FAILURE);
+  else if (m_globalKernel.value().size() == 0 && m_kernelFileName.value().length() == 0)
+    throw GaudiException("No charge sharing kernel specified! Please provide either a global kernel or a file containing charge sharing kernels.", "VTXdigi_Allpix2::checkGaudiProperties()", StatusCode::FAILURE);
+}
+
+void VTXdigi_Allpix2::setupSensorParameters() {
+
+  if (m_layersToDigitize.value().empty()) {
+    verbose() << " - No layers specified to be digitized, will digitize all layers found in geometry." << endmsg;
+
+    /* TODO: Find all layers in geometry & set m_layerCount accordingly. right now this doesnt work.*/
+    throw GaudiException("Finding all layers in geometry is not implemented yet. Please specify the layers to be digitized via the LayersToDigitize property.", "VTXdigi_Allpix2::setupSensorParameters()", StatusCode::FAILURE);
+
+    m_layerCount = 5; // placeholder, needs to be set properly when finding all layers in geometry is implemented
+  }
+  else { // if layers are specified as Gaudi property
+    m_layerCount = m_layersToDigitize.size();
+    verbose() << " - Digitizing " << m_layerCount << " layers as specified in LayersToDigitize property." << endmsg;
+
+    /* create layer number to internal index map
+     * needed in case the user specifies non-consecutive layer numbers */
+    m_layerToIndex.clear();
+    for (size_t layerIndex = 0; layerIndex < m_layersToDigitize.size(); layerIndex++) {
+      int layer = m_layersToDigitize.value().at(layerIndex);
+      m_layerToIndex.insert({layer, static_cast<int>(layerIndex)});
+    }
+    debug() << " - Digitizing the following layers: " << endmsg;
+    for (const auto& [layer, index] : m_layerToIndex) {
+      debug() << "   - Layer " << layer << " (index " << index << ")" << endmsg;
+    }
+
+    /* check sensor & pixel parameters */
+    if (m_pixelCount_u.value().size() == 1 && m_pixelCount_v.value().size()) {
+      // single value for all layers, rewrite to vector of correct size
+      m_pixelCount_u.value().resize(m_layerCount, m_pixelCount_u.value().at(0));
+      m_pixelCount_v.value().resize(m_layerCount, m_pixelCount_v.value().at(0));
+      verbose() << " - found single values for pixel counts, applying them to all layers" << endmsg;
+    }
+    else if (
+      m_pixelCount_u.value().size() == static_cast<long unsigned int>(m_layerCount) && 
+      m_pixelCount_v.value().size() == static_cast<long unsigned int>(m_layerCount)) {
+        // one entry per layer
+        verbose() << " - found pixel count values for all " << m_layerCount << " layers" << endmsg;
+      }
+    else {
+      throw GaudiException("Pixel counts must either have a single value (that is then applied to all layers) or one value per layer to be digitized.", "VTXdigi_Allpix2::setupSensorParameters()", StatusCode::FAILURE);
+    }
+  }
+}
+
+void VTXdigi_Allpix2::loadKernels() {
+  verbose() << " - Importing charge sharing kernels..." << endmsg;
+  
+  /* sanity check */
+  if (m_globalKernel.value().empty() && m_kernelFileName.value().empty())
+    throw GaudiException("No charge sharing kernel specified! Please provide either a global kernel or a kernel file.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+
+  /* load kernels */
+  if (!m_globalKernel.value().empty()) { // use global kernel (mostly for debugging)
+    debug() << " - Global kernel specified in <config>, applying this for all layers" << endmsg;
+
+    for (int i=0; i<3; i++)
+      m_inPixelBinCount[i] = 10;
+
+    m_kernelSize = static_cast<int>(std::sqrt(m_globalKernel.value().size()));
+    verbose() << " -   Using kernel size of " << m_kernelSize << " (from global kernel with " << m_globalKernel.value().size() << " entries)" << endmsg;
+
+    m_chargeSharingKernels = std::make_unique<ChargeSharingKernels>(m_inPixelBinCount[0], m_inPixelBinCount[1], m_inPixelBinCount[2], m_kernelSize);
+
+    /* kernel size is checked in ChargeSharingKernel::SetAllKernels() */
+    m_chargeSharingKernels->SetAllKernels(m_globalKernel.value());
+  }
+  else { // load from file
+    debug() << " - Loading kernels from file: " << m_kernelFileName.value() << endmsg;
+    /* This implements parsing the default Allpix2 kernel file format. A general version was implemented in a previous commit (2025-11), but removed because the amount of options made it unneccessarily hard to validate and use. 
+     * See https://indico.cern.ch/event/1489052/contributions/6475539/attachments/3063712/5418424/Allpix_workshop_Lemoine.pdf (slide 10) for more info on fields in the kernel file */
+
+    const int headerLines = 5; // allpix2 kernel files have 5 header lines, and then a kernel per line
+
+    info() << " -   Opening kernel file: " << m_kernelFileName.value() << ". Expecting Allpix2 format, defined in ChargePropagationWriter module." << endmsg;
+    std::ifstream kernelFile(m_kernelFileName.value());
+    if (!kernelFile.is_open())
+      throw GaudiException("Could not open kernel file: " + m_kernelFileName.value(), "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+
+    std::string line;
+    int lineNumber = 0; // next line to be read (0-indexed)
+    float kernelsSum = 0.f;
+
+    /* loading pixel-pitch, thickness and in-pixel bin counts from header (all in 5th line) */
+    for (; lineNumber < 5; ++lineNumber)
+      std::getline(kernelFile, line);
+
+    std::istringstream headerStringStream(line);
+    std::string headerEntry;
+    std::vector<std::string> headerLineEntries;
+
+    while (std::getline(headerStringStream, headerEntry, ' ')) {
+      if (!headerEntry.empty())
+        headerLineEntries.push_back(headerEntry);
+    }
+
+    if (headerLineEntries.size() != 11)
+      throw GaudiException("Invalid number of entries in kernel file at header line 5: found " + std::to_string(headerLineEntries.size()) + " entries, expected 11.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+
+    
+    
+    float thickness = std::stof(headerLineEntries.at(0)) / 1000.f; // convert from um to mm
+    float pitch_u = std::stof(headerLineEntries.at(1)) / 1000.f;
+    float pitch_v = std::stof(headerLineEntries.at(2)) / 1000.f;
+    for (int i=0; i<3; i++)
+      m_inPixelBinCount[i] = std::stoi(headerLineEntries.at(7+i));
+
+    /* Initialize sensor properties. This implementation needs to be changed in case of different sensor types across layers */
+    m_pixelPitch_u.resize(m_layerCount, pitch_u);
+    m_pixelPitch_v.resize(m_layerCount, pitch_v);
+    m_sensorThickness.resize(m_layerCount, thickness);
+
+    verbose() << " -   found pixel-pitch of (" << pitch_u << " x " << pitch_v << ") mm2, thickness of " << thickness << " mm, and in-pixel bin count of (" << m_inPixelBinCount[0] << ", " << m_inPixelBinCount[1] << ", " << m_inPixelBinCount[2] << ")." << endmsg;
+
+    /* get the kernel size (5x5, 7x7, ...) from the length of the first line after the header */
+
+    if (std::getline(kernelFile, line)) {
+      m_kernelSize = static_cast<int>(std::sqrt(std::count(line.begin(), line.end(), ' ') - 2)); // not very robust, but works for valid Allpix2 files. first 3 entries are bin indices
+    }
+    else {
+      throw GaudiException("Could not read first kernel line after header in kernel file: " + m_kernelFileName.value(), "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+    }
+    verbose() << " - Detected kernel size of " << m_kernelSize << " from first kernel line." << endmsg;
+
+    /* set up mapping from Allpix2 kernel format
+    *   (row-major, starts on bottom left)
+    * to the format expected by the ChargeSharingKernels class 
+    *   (row-major, starts on top-left) */
+    std::vector<int> valueIndices(m_kernelSize*m_kernelSize, 0); // i: index in local format; valueIndices[i]: index in Allpix2 format
+    for (int i_u = 0; i_u < m_kernelSize; i_u++) {
+      for (int i_v = 0; i_v < m_kernelSize; i_v++) {
+        int i_allpix2 = i_u + (m_kernelSize - 1 - i_v) * m_kernelSize;
+        int i_local = i_u + i_v * m_kernelSize;
+        valueIndices[i_local] = i_allpix2;
+      }
+    }
+
+    /* reset the file and go to the beginning of the kernel data (after header) */
+    kernelFile.clear();
+    kernelFile.seekg(0, std::ios::beg);
+    for (int i=0; i<headerLines; ++i)
+      std::getline(kernelFile, line);
+    
+    /* loop over lines that contain a kernel each, set the kernels */
+    int kernelSize = 0;
+    m_chargeSharingKernels = std::make_unique<ChargeSharingKernels>(m_inPixelBinCount[0], m_inPixelBinCount[1], m_inPixelBinCount[2], m_kernelSize);
+
+    verbose() << " -   Loading kernels from file lines ..." << endmsg;
+    while (std::getline(kernelFile, line)) {
+      if (line.empty() || line[0] == '#')
+        throw GaudiException("Empty or comment line found in kernel file at line " + std::to_string(lineNumber+1) + ". All lines (after 5 header lines) must contain valid kernel data.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+      
+      std::istringstream stringStream(line);
+      std::vector<std::string> lineEntries;
+      std::string entryString;
+
+      /* read the line & do sanity checks */
+      while (std::getline(stringStream, entryString, ' ')) {
+        if (!entryString.empty())
+          lineEntries.push_back(entryString);
+      }
+
+      if (kernelSize == 0)
+        kernelSize = static_cast<int>(std::sqrt(lineEntries.size() - 3)); // first 3 entries are bin indices
+      else if (kernelSize != static_cast<int>(std::sqrt(lineEntries.size() - 3)))
+        throw GaudiException("Invalid number of entries in kernel file at line " + std::to_string(lineNumber+1) + ": found " + std::to_string(lineEntries.size()) + " entries, expected " + std::to_string(3 + m_kernelSize * m_kernelSize) + " = 3 indices + kernelSize^2.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+
+      /* in-pixel bin of this kernel, given in first 3 columns */
+      int j_u = std::stoi(lineEntries[0]) - 1; // Allpix2 input is 1-indexed, sane people use 0-indexing
+      int j_v = std::stoi(lineEntries[1]) - 1;
+      int j_w = std::stoi(lineEntries[2]) - 1;
+
+      if (j_u < 0 || j_u >= m_inPixelBinCount[0] ||
+          j_v < 0 || j_v >= m_inPixelBinCount[1] ||
+          j_w < 0 || j_w >= m_inPixelBinCount[2]) {
+        throw GaudiException("Invalid in-pixel bin indices in kernel file at line " + std::to_string(lineNumber+1) + ": got (" + std::to_string(j_u) + ", " + std::to_string(j_v) + ", " + std::to_string(j_w) + "), but expected ranges are [0, " + std::to_string(m_inPixelBinCount[0]-1) + "], [0, " + std::to_string(m_inPixelBinCount[1]-1) + "], [0, " + std::to_string(m_inPixelBinCount[2]-1) + "].", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+      }
+
+      /* Parse kernel values & do sanity checks */
+      std::vector<float> kernelValues(m_kernelSize*m_kernelSize, 0.);
+      float kernelValueSum = 0.f;
+      for (int i = 0; i < m_kernelSize*m_kernelSize; i++) {
+        float entry = std::stof(lineEntries[3 + valueIndices[i]]); // NaN check done on sum
+        kernelValues[i] = entry;
+        kernelValueSum += entry;
+      } 
+
+      if (std::isnan(kernelValueSum))
+        throw GaudiException("NaN encountered in kernel for in-pixel bin (" + std::to_string(j_u) + ", " + std::to_string(j_v) + ", " + std::to_string(j_w) + ") at line " + std::to_string(lineNumber) + " in kernel file.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+
+      if (kernelValueSum < 0.f || kernelValueSum > 1.f + m_numericLimit_float) {
+        warning() << "Kernel for in-pixel bin (" << j_u << ", " << j_v << ", " << j_w << ") has invalid sum (" << kernelValueSum << ", must be in [0, 1]). Normalising to 1." << endmsg;
+        for (auto& value : kernelValues)
+          value /= kernelValueSum;
+      }
+
+      /* finalize this line, actually set the kernel */
+      debug() << " -     Parsed kernel for in-pixel bin (" << j_u << ", " << j_v << ", " << j_w << ") with entry sum " << std::to_string(kernelValueSum) << ", setting it now..." << endmsg;
+      kernelsSum += kernelValueSum;
+      m_chargeSharingKernels->SetKernel(j_u, j_v, j_w, kernelValues);
+      lineNumber++;
+
+    } // loop over lines with kernels
+
+    if (lineNumber - headerLines != m_inPixelBinCount[0] * m_inPixelBinCount[1] * m_inPixelBinCount[2])
+      throw GaudiException("Invalid number of kernels loaded from file: expected " + std::to_string(m_inPixelBinCount[0] * m_inPixelBinCount[1] * m_inPixelBinCount[2]) + " kernels (inferred from InPixelBinCount = [" + std::to_string(m_inPixelBinCount[0]) + ", " + std::to_string(m_inPixelBinCount[1]) + ", " + std::to_string(m_inPixelBinCount[2]) + "]), but got " + std::to_string(lineNumber - headerLines) + ".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+
+    kernelsSum /= static_cast<float>(lineNumber - headerLines);
+    info() << " - Loaded " << (lineNumber - headerLines) << " kernels from file. " << kernelsSum*100 << " percent of charge deposited in the sensor volume is collected by the pixels (the rest is lost, eg. due to being outside of depletion or due to trapping)." << endmsg;
+  } // if load from file
+}
+
+void VTXdigi_Allpix2::setupDebugHistograms() {
+  error() << " - You enabled creating debug histograms by setting `DebugHistograms = True`. This is NOT MULTITHREADING SAFE and will cause crashes if multithreading is used." << endmsg;
+  verbose () << " - Creating debug histograms ..." << endmsg;
+
+  /* -- 1D Histograms -- */
+
+  m_histograms.at(hist_simHitE).reset(
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, 
+      "simHitE", "SimHit Energy;keV", 
+      {1000, 0, m_sensorThickness.at(0)*2000}}); 
+  m_histograms.at(hist_simHitCharge).reset(
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this,
+      "simHitCharge", "SimHit Raw Charge;dep. charges [e-]",
+      {1000, 0, m_sensorThickness.at(0)*500000}});
+
+  m_histograms.at(hist_clusterSize_raw).reset(
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "ClusterSize_Raw", "Cluster Size of Raw Charges (ie. number of pixels that receive any charge from this simHit);Cluster size [pix]", {50, -0.5, 49.5}});
+  m_histograms.at(hist_clusterSize_measured).reset(
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "ClusterSize_Measured", "Cluster Size of Measured Charges (ie. number of pixels that are above threshold due to the simHit's deposited charge);Cluster size [pix]", {50, -0.5, 49.5}});
+
+  m_histograms.at(hist_pathLength).reset(
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "PathLength", "Path Length in Sensor Active Volume;Path length [um]", {500, 0., m_sensorThickness.at(0)*10*1000}}); // in um, max 10x sensor thickness (for very shallow angles)
+  m_histograms.at(hist_pathLengthGeant4).reset(
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "PathLength-Geant4", "Path Length in Sensor Active Volume\nAs Given by Geant4;Path length [um]", {500, 0., m_sensorThickness.at(0)*10*1000}}); // in um, max 10x sensor thickness (for very shallow angles)
+
+  m_histograms.at(hist_EntryPointX).reset(
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "EntryPointX", "SimHit Entry Point U (in local sensor frame);u [mm]", {400, -4, 4}});
+  m_histograms.at(hist_EntryPointY).reset(
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "EntryPointY", "SimHit Entry Point V (in local sensor frame);v [mm]", {2000, -20, 20}});
+  m_histograms.at(hist_EntryPointZ).reset(
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "EntryPointZ", "SimHit Entry Point W (in local sensor frame);w [mm]", {1000, -300, 300}});
+
+  m_histograms.at(hist_DisplacementU).reset(
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "LocalDisplacementU", "Displacement U (local sensor frame): digiHit_u - simHit_u;dU [um]", {800, -200, 200}});
+  m_histograms.at(hist_DisplacementV).reset(
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "LocalDisplacementV", "Displacement V (local sensor frame): digiHit_v - simHit_v;dV [um]", {800, -200, 200}});
+  m_histograms.at(hist_DisplacementR).reset(
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "GlobalDisplacementR", "Displacement R (global frame): | digiHit - simHit |;dR [um]", {300, 0., 300}});
+
+  m_histograms.at(hist_chargeCollectionEfficiency_raw).reset(
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "ChargeCollectionEfficiency_rawCharge", "Charge collection efficiency (raw charge, eg. before noise & threshold);# e- (digitised) / # e- (simHit)", {500, 0., 2.}});
+  
+  m_histograms.at(hist_chargeCollectionEfficiency).reset(
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "ChargeCollectionEfficiency", "Charge collection efficiency;# e- (digitised) / # e- (simHit)", {500, 0., 2.}});
+
+  
+
+  m_histograms.at(hist_pixelChargeMatrix_size_u).reset(
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "PixelChargeMatrix_Size_u", "Final Size of the Pixel Charge Matrix in u (local);pixel charge matrix size u [pix]", {100, -0.5, 99.5}});
+  m_histograms.at(hist_pixelChargeMatrix_size_v).reset(
+    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "PixelChargeMatrix_Size_v", "Final Size of the Pixel Charge Matrix in v (local);pixel charge matrix size v [pix]", {100, -0.5, 99.5}});
+
+  /* -- 2D Histograms -- */
+
+  m_histograms2d.resize(m_layersToDigitize.size()); // resize vector to hold all histograms
+  m_histWeighted2d.resize(m_layersToDigitize.size());
+
+  for (int layer : m_layersToDigitize) {
+    int layerIndex = m_layerToIndex.at(layer);
+    verbose () << " - Creating 2D histograms for layer " << layer << " (index " << layerIndex << ")" << endmsg;
+
+    m_histograms2d.at(layerIndex).at(hist2d_hitMap_simHits).reset(
+      new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
+        "Layer"+std::to_string(layer)+"_HitMap_simHits",
+        "SimHit Hitmap, Layer " + std::to_string(layer) + ";u [pix]; v [pix]",
+        {static_cast<unsigned int>(m_pixelCount_u.value().at(0)), -0.5, static_cast<double>(m_pixelCount_u.value().at(0)+0.5)},
+        {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)}
+      }
+    );
+    m_histograms2d.at(layerIndex).at(hist2d_hitMap_digiHits).reset(
+      new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
+        "Layer"+std::to_string(layer)+"_HitMap_digiHits",
+        "DigiHit Hitmap, Layer " + std::to_string(layer) + ";u [pix]; v [pix]",
+        {static_cast<unsigned int>(m_pixelCount_u.value().at(0)), -0.5, static_cast<double>(m_pixelCount_u.value().at(0)+0.5)},
+        {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)}
+      }
+    );
+    m_histograms2d.at(layerIndex).at(hist2d_pathLength_vs_simHit_v).reset(
+      new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
+        "Layer"+std::to_string(layer)+"_TrackLength_vs_simHit_v",
+        "Track Length in Sensor Active Volume vs. SimHit v position (local), Layer " + std::to_string(layer) + ";SimHit v [pix];Track length [um]",
+          {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)},
+        {200, 0., 10*m_sensorThickness.at(layerIndex)*1000}, // in um
+      
+      }
+    );
+    m_histograms2d.at(layerIndex).at(hist2d_pixelChargeMatrixSize).reset(
+      new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
+        "Layer"+std::to_string(layer)+"_PixelChargeMatrixSize",
+        "Pixel Charge Matrix Size, Layer " + std::to_string(layer) + ";u [pix];v [pix]",
+        {100, -0.5, 99.5},
+        {100, -0.5, 99.5}
+      }
+    );
+    m_histograms2d.at(layerIndex).at(hist2d_pathAngleToSensorNormal).reset(
+      new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
+        "Layer"+std::to_string(layer)+"_PathAngleToSensorNormal",
+        "Path Angle to Sensor Normal Vector, Layer " + std::to_string(layer) + ";d_theta [deg];d_phi [deg]",
+        {360, -180., 180.},
+        {360, -180., 180.}
+      }
+    );
+    
+
+    m_histWeighted2d.at(layerIndex).at(histWeighted2d_averageCluster_rawCharge).reset(
+      new Gaudi::Accumulators::StaticWeightedHistogram<2, Gaudi::Accumulators::atomicity::full, double>{this,
+        "Layer"+std::to_string(layer)+"_AverageCluster_rawCharge",
+        "Average Cluster Shape, without Threshold & Noise, Layer " + std::to_string(layer) + "(charge per hit normalised to 1);u [pix]; v [pix]",
+        {static_cast<unsigned int>(m_maxClusterSize.value().at(0)),
+          -static_cast<double>(m_maxClusterSize.value().at(0))/2,
+          static_cast<double>(m_maxClusterSize.value().at(0))/2},
+        {static_cast<unsigned int>(m_maxClusterSize.value().at(1)),
+          -static_cast<double>(m_maxClusterSize.value().at(1))/2,
+          static_cast<double>(m_maxClusterSize.value().at(1))/2}
+      }
+    );
+    m_histWeighted2d.at(layerIndex).at(histWeighted2d_averageCluster_measuredCharge).reset(
+      new Gaudi::Accumulators::StaticWeightedHistogram<2, Gaudi::Accumulators::atomicity::full, double>{this,
+        "Layer"+std::to_string(layer)+"_AverageCluster_measuredCharge",
+        "Average Cluster Shape, after applying Threshold & Noise, Layer " + std::to_string(layer) + "(charge per hit normalised to 1);u [pix]; v [pix]",
+        {static_cast<unsigned int>(m_maxClusterSize.value().at(0)),
+          -static_cast<double>(m_maxClusterSize.value().at(0))/2,
+          static_cast<double>(m_maxClusterSize.value().at(0))/2},
+        {static_cast<unsigned int>(m_maxClusterSize.value().at(1)),
+          -static_cast<double>(m_maxClusterSize.value().at(1))/2,
+          static_cast<double>(m_maxClusterSize.value().at(1))/2}
+      }
+    );
+  }
+}
+
+void VTXdigi_Allpix2::setupDebugCsvOutput() {
+  m_debugCsv = true;
+
+  error() << " - You enabled the CSV output by setting `DebugCsvFileName` to a path. This is NOT MULTITHREADING SAFE and will cause crashes if multithreading is used." << endmsg;
+  m_debugCsvFile.open(m_debugCsvFileName.value());
+
+  if (!m_debugCsvFile.is_open()) {
+    throw GaudiException("Failed to open debug CSV file", "VTXdigi_Allpix2::initialize", StatusCode::FAILURE);
+  } else {
+    m_debugCsvFile << "eventNumber,layerIndex,segmentCount,sensorThickness,pix_u,pix_v,simHitPos_u,simHitPos_v,simHitPos_w,simHitEntryPos_u,simHitEntryPos_v,simHitEntryPos_w,simHitPath_u,simHitPath_v,simHitPath_w,pathLengthGeant4,pathLength,rawChargeDeposition,debugFlag\n";
+    m_debugCsvFile.flush();
+    debug() << "   - writing to file: " << m_debugCsvFileName.value() << endmsg;
+  }
+}
+
+void VTXdigi_Allpix2::printCountersSummary() const {
+  const int colWidths[] = {65, 10};  
+  info() << " Counters summary: " << endmsg;
+  info() << " | " << std::setw(colWidths[0]) << std::left << "Events read"
+         << " | " << std::setw(colWidths[1]) << std::right << m_counter_eventsRead.value() << " |" << endmsg;
+  info() << " | " << std::setw(colWidths[0]) << std::left << "Events rejected (no simHits)"
+         << " | " << std::setw(colWidths[1]) << std::right << m_counter_eventsRejected_noSimHits.value() << " |" << endmsg;
+  info() << " | " << std::setw(colWidths[0]) << std::left << "Events accepted"
+         << " | " << std::setw(colWidths[1]) << std::right << m_counter_eventsAccepted.value() << " |" << endmsg;
+  if (m_counter_eventsRead.value() != m_counter_eventsRejected_noSimHits.value() + m_counter_eventsAccepted.value())
+    warning() << " | Number of accepted and rejected events does not add up to total number of processed events!" << endmsg;
+  else info() << " | - event numbers add up." << endmsg;
+  
+  info() << " | " << std::setw(colWidths[0]) << std::left << "Simhits read"
+         << " | " << std::setw(colWidths[1]) << std::right << m_counter_simHitsRead.value() << " |" << endmsg;
+  info() << " | " << std::setw(colWidths[0]) << std::left << "Simhits rejected (in layer not to be digitized)"
+         << " | " << std::setw(colWidths[1]) << std::right << m_counter_simHitsRejected_LayerNotToBeDigitized.value() << " |" << endmsg;
+  info() << " | " << std::setw(colWidths[0]) << std::left << "Simhits rejected (below charge cut)"
+         << " | " << std::setw(colWidths[1]) << std::right << m_counter_simHitsRejected_ChargeCut.value() << " |" << endmsg;
+  info() << " | " << std::setw(colWidths[0]) << std::left << "Simhits rejected (path outside sensor)"
+         << " | " << std::setw(colWidths[1]) << std::right << m_counter_simHitsRejected_OutsideSensor.value() << " |" << endmsg;
+  info() << " | " << std::setw(colWidths[0]) << std::left << "Simhits accepted"
+         << " | " << std::setw(colWidths[1]) << std::right << m_counter_simHitsAccepted.value() << " |" << endmsg;
+  const long int simHitsRejected = (
+    m_counter_simHitsRejected_LayerNotToBeDigitized.value() + 
+    m_counter_simHitsRejected_ChargeCut.value() + 
+    m_counter_simHitsRejected_OutsideSensor.value() );
+  if (m_counter_simHitsRead.value() != simHitsRejected + m_counter_simHitsAccepted.value())
+    warning() << " | Number of accepted and rejected simHits does not add up to total number of processed simHits!" << endmsg;
+  else info() << " | - simHit numbers add up." << endmsg;
+
+  info() << " | " << std::setw(colWidths[0]) << std::left << "Calculated path did not pass through the sensor active volume"
+         << " | " << std::setw(colWidths[1]) << std::right << m_counter_acceptedButNoSegmentsInSensor.value() << " |" << endmsg;
+  info() << " | " << std::setw(colWidths[0]) << std::left << "DigiHits created"
+         << " | " << std::setw(colWidths[1]) << std::right << m_counter_digiHitsCreated.value() << " |" << endmsg;
+}
+
+/* -- Core algorithm functions -- */
 
 bool VTXdigi_Allpix2::CheckInitialSetup(const edm4hep::SimTrackerHitCollection& simHits, const edm4hep::EventHeaderCollection& headers) const {
   info() << "PROCESSING event. run " << headers.at(0).getRunNumber() << "; event " << headers.at(0).getEventNumber() << "; with " << simHits.size() << " simHits" << endmsg;
@@ -502,22 +667,15 @@ std::tuple<VTXdigi_Allpix2::HitInfo, VTXdigi_Allpix2::HitPosition> VTXdigi_Allpi
 
 bool VTXdigi_Allpix2::CheckSimHitCuts (const HitInfo& hitInfo, const HitPosition& hitPos) const {
 
-  // DISMISS if simHitPosition is not on the DD4hep sensor simSurface
-  if (m_cutDistanceToSurface) {
-    if (abs(hitInfo.simSurface()->distance(dd4hep::mm * hitPos.global)) > m_numericLimit_float) {
-      verbose() << "   - DISMISSED simHit (is not on the DD4hep sensor simSurface (distance = " << hitInfo.simSurface()->distance(dd4hep::mm * hitPos.global) * 1000 << " um)." << endmsg; // convert to um
-      ++m_counter_simHitsRejected_SurfaceDistToLarge;
-      return false;
-    }
-  }
-  
   // DISMISS if entry point is outside sensor
   if (m_cutPathOutsideSensor) {
+
     if (abs(hitPos.entry.z()) > hitInfo.thickness() / 2 + m_numericLimit_float) { // entry point is outside sensor thickness
       verbose() << "   - DISMISSED simHit (entry point is outside sensor thickness (local w = " << hitPos.entry.z()*1000 << " um, sensor thickness = " << hitInfo.thickness()*1000 << " um)." << endmsg;
       ++m_counter_simHitsRejected_OutsideSensor;
       return false;
     }
+
     if (abs(hitPos.entry.z()+hitPos.path.z()) > hitInfo.thickness() / 2 + m_numericLimit_float) { // exit point is outside sensor thickness
       verbose() << "   - DISMISSED simHit (exit point is outside sensor thickness (local w = " << (hitPos.entry.z()+hitPos.path.z())*1000 << " um, sensor thickness = " << hitInfo.thickness()*1000 << " um)." << endmsg;
       ++m_counter_simHitsRejected_OutsideSensor;
@@ -665,7 +823,6 @@ VTXdigi_Allpix2::PixelChargeMatrix VTXdigi_Allpix2::ShareCharge(HitInfo& hitInfo
         warning() << "Applying Kernel: Segments lie outside sensor area. Dismissing." << endmsg;
         continue; // segment is outside sensor area
       }
-      // new pixel or in-pixel bin, apply kernel for previous bin
 
       /* each kernel entry shares charge from the source-pixel i_u, i_v to one target-pixel.
         * The kernel is centered on the source pixel, so loop over all target pixels covered by the kernel.
@@ -822,7 +979,7 @@ void VTXdigi_Allpix2::FillDebugHistograms(const HitInfo& hitInfo, const HitPosit
 }
 
 
-// -- Pixel and in-pixel binning magic (logic) --
+/* -- Pixel and in-pixel binning magic (logic) -- */
 
 int VTXdigi_Allpix2::computeBinIndex(float x, float binX0, float binWidth, int binN) const {
   /** Get the bin index for a given x value
@@ -846,13 +1003,13 @@ std::tuple<int, int> VTXdigi_Allpix2::computePixelIndices(const dd4hep::rec::Vec
   int i_u = computeBinIndex(
     segmentPos.x(),
     -0.5*length_u,
-    m_pixelPitch_u.value().at(layerIndex),
+    m_pixelPitch_u.at(layerIndex),
     m_pixelCount_u.value().at(layerIndex));
 
   int i_v = computeBinIndex(
     segmentPos.y(),
     -0.5*length_v,
-    m_pixelPitch_v.value().at(layerIndex),
+    m_pixelPitch_v.at(layerIndex),
     m_pixelCount_v.value().at(layerIndex));
   return std::make_tuple(i_u, i_v);
 } // computePixelIndices()
@@ -862,22 +1019,22 @@ std::tuple<int, int, int> VTXdigi_Allpix2::computeInPixelIndices(const dd4hep::r
 
   // compute in-pixel position
   float shiftedPos_u = segmentPos.x() + 0.5 * length_u; // expected in [0, length_u]
-  float pitch_u = m_pixelPitch_u.value().at(layerIndex);
+  float pitch_u = m_pixelPitch_u.at(layerIndex);
   float inPixelPos_u = std::fmod(shiftedPos_u, pitch_u);
   if (inPixelPos_u < 0.0) inPixelPos_u += pitch_u; // ensure positive remainder
 
   j_u = computeBinIndex(inPixelPos_u, 0.0, pitch_u / m_inPixelBinCount[0], m_inPixelBinCount[0]);
 
   float shiftedPos_v = segmentPos.y() + 0.5 * length_v;
-  float pitch_v = m_pixelPitch_v.value().at(layerIndex);
+  float pitch_v = m_pixelPitch_v.at(layerIndex);
   float inPixelPos_v = std::fmod(shiftedPos_v, pitch_v);
   if (inPixelPos_v < 0.0) inPixelPos_v += pitch_v;
 
   j_v = computeBinIndex(inPixelPos_v, 0.0, pitch_v / m_inPixelBinCount[1], m_inPixelBinCount[1]);
 
   // vertical (w) binning: shift to [0, thickness]
-  float shiftedPos_w = segmentPos.z() + 0.5 * m_sensorThickness.value().at(layerIndex);
-  j_w = computeBinIndex(shiftedPos_w, 0.0, m_sensorThickness.value().at(layerIndex) / m_inPixelBinCount[2], m_inPixelBinCount[2]);
+  float shiftedPos_w = segmentPos.z() + 0.5 * m_sensorThickness.at(layerIndex);
+  j_w = computeBinIndex(shiftedPos_w, 0.0, m_sensorThickness.at(layerIndex) / m_inPixelBinCount[2], m_inPixelBinCount[2]);
 
   return std::make_tuple(j_u, j_v, j_w);
 } // computeInPixelIndices()
@@ -931,14 +1088,14 @@ dd4hep::rec::Vector3D VTXdigi_Allpix2::computePixelCenter_Local(const int i_u, c
   float length_u = simSurface.length_along_u() * 10; // convert to mm (works, checked 2025-10-17)
   float length_v = simSurface.length_along_v() * 10; // convert to mm 
 
-  float posU = -0.5 * length_u + (i_u + 0.5) * m_pixelPitch_u.value().at(layerIndex); // in mm
-  float posV = -0.5 * length_v + (i_v + 0.5) * m_pixelPitch_v.value().at(layerIndex); // in mm
+  float posU = -0.5 * length_u + (i_u + 0.5) * m_pixelPitch_u.at(layerIndex); // in mm
+  float posV = -0.5 * length_v + (i_v + 0.5) * m_pixelPitch_v.at(layerIndex); // in mm
 
   return dd4hep::rec::Vector3D(posU, posV, 0.); 
 }
 
 
-// -- Transformation between global frame and local sensor frame --
+/* -- Transformation between global frame and local sensor frame -- */
 
 TGeoHMatrix VTXdigi_Allpix2::computeTransformationMatrix(const dd4hep::DDSegmentation::CellID& cellID) const {
 
@@ -1012,7 +1169,7 @@ dd4hep::rec::Vector3D VTXdigi_Allpix2::transformLocalToGlobal(const dd4hep::rec:
 }
 
 
-// -- Other Helper functions --
+/* -- Other Helper functions -- */
 
 dd4hep::rec::Vector3D VTXdigi_Allpix2::convertVector(edm4hep::Vector3d vec) const {
   // return dd4hep::rec::Vector3D(vec.x*dd4hep::mm, vec.y*dd4hep::mm, vec.z*dd4hep::mm);
@@ -1100,160 +1257,5 @@ void VTXdigi_Allpix2::appendSimHitToCsv(const HitInfo& hitInfo, const HitPositio
   return;
 }
 
-void VTXdigi_Allpix2::loadKernels() {
-  verbose() << " - Importing charge sharing kernels..." << endmsg;
-  
-  /* sanity check */
-  if (m_globalKernel.value().empty() && m_kernelFileName.value().empty())
-    throw GaudiException("No charge sharing kernel specified! Please provide either a global kernel or a kernel file.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
 
-  /* load kernels */
-  if (!m_globalKernel.value().empty()) { // use global kernel (mostly for debugging)
-    debug() << " - Global kernel specified in <config>, applying this for all layers" << endmsg;
 
-    for (int i=0; i<3; i++)
-      m_inPixelBinCount[i] = 10;
-
-    m_kernelSize = static_cast<int>(std::sqrt(m_globalKernel.value().size()));
-    verbose() << " -   Using kernel size of " << m_kernelSize << " (from global kernel with " << m_globalKernel.value().size() << " entries)" << endmsg;
-
-    m_chargeSharingKernels = std::make_unique<ChargeSharingKernels>(m_inPixelBinCount[0], m_inPixelBinCount[1], m_inPixelBinCount[2], m_kernelSize);
-
-    /* kernel size is checked in ChargeSharingKernel::SetAllKernels() */
-    m_chargeSharingKernels->SetAllKernels(m_globalKernel.value());
-  }
-  else { // load from file
-    debug() << " - Loading kernels from file: " << m_kernelFileName.value() << endmsg;
-    /* This implements parsing the default Allpix2 kernel file format. A general version was implemented in a previous commit (2025-11), but removed because the amount of options made it unneccessarily hard to validate and use. 
-     * See https://indico.cern.ch/event/1489052/contributions/6475539/attachments/3063712/5418424/Allpix_workshop_Lemoine.pdf (slide 10) for more info on fields in the kernel file */
-
-    const int headerLines = 5; // allpix2 kernel files have 5 header lines, and then a kernel per line
-
-    info() << " -   Opening kernel file: " << m_kernelFileName.value() << ". Expecting Allpix2 format, defined in ChargePropagationWriter module." << endmsg;
-    std::ifstream kernelFile(m_kernelFileName.value());
-    if (!kernelFile.is_open())
-      throw GaudiException("Could not open kernel file: " + m_kernelFileName.value(), "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-
-    std::string line;
-    int lineNumber = 0; // next line to be read (0-indexed)
-    float kernelsSum = 0.f;
-
-    /* loading pixel-pitch, thickness and in-pixel bin counts from header (all in 5th line) */
-    for (; lineNumber < 5; ++lineNumber)
-      std::getline(kernelFile, line);
-
-    std::istringstream headerStringStream(line);
-    std::string headerEntry;
-    std::vector<std::string> headerLineEntries;
-
-    while (std::getline(headerStringStream, headerEntry, ' ')) {
-      if (!headerEntry.empty())
-        headerLineEntries.push_back(headerEntry);
-    }
-
-    if (headerLineEntries.size() != 11)
-      throw GaudiException("Invalid number of entries in kernel file at header line 5: found " + std::to_string(headerLineEntries.size()) + " entries, expected 11.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-
-    float thickness = std::stof(headerLineEntries.at(0));
-    float pitch[2] = { std::stof(headerLineEntries.at(1)), std::stof(headerLineEntries.at(2)) };
-    for (int i=0; i<3; i++)
-      m_inPixelBinCount[i] = std::stoi(headerLineEntries.at(7+i));
-    verbose() << " -   found pixel-pitch of (" << pitch[0] << " x " << pitch[1] << ") um2, thickness of " << thickness << " um, and in-pixel bin count of (" << m_inPixelBinCount[0] << ", " << m_inPixelBinCount[1] << ", " << m_inPixelBinCount[2] << ")." << endmsg;
-
-    /* get the kernel size (5x5, 7x7, ...) from the length of the first line after the header */
-
-    if (std::getline(kernelFile, line)) {
-      m_kernelSize = static_cast<int>(std::sqrt(std::count(line.begin(), line.end(), ' ') - 2)); // not very robust, but works for valid Allpix2 files. first 3 entries are bin indices
-    }
-    else {
-      throw GaudiException("Could not read first kernel line after header in kernel file: " + m_kernelFileName.value(), "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-    }
-    verbose() << " -   Detected kernel size of " << m_kernelSize << " from first kernel line." << endmsg;
-
-    /* set up mapping from Allpix2 kernel format
-    *   (row-major, starts on bottom left)
-    * to the format expected by the ChargeSharingKernels class 
-    *   (row-major, starts on top-left) */
-    std::vector<int> valueIndices(m_kernelSize*m_kernelSize, 0); // i: index in local format; valueIndices[i]: index in Allpix2 format
-    for (int i_u = 0; i_u < m_kernelSize; i_u++) {
-      for (int i_v = 0; i_v < m_kernelSize; i_v++) {
-        int i_allpix2 = i_u + (m_kernelSize - 1 - i_v) * m_kernelSize;
-        int i_local = i_u + i_v * m_kernelSize;
-        valueIndices[i_local] = i_allpix2;
-      }
-    }
-
-    /* reset the file and go to the beginning of the kernel data (after header) */
-    kernelFile.clear();
-    kernelFile.seekg(0, std::ios::beg);
-    for (int i=0; i<headerLines; ++i)
-      std::getline(kernelFile, line);
-    
-    /* loop over lines that contain a kernel each, set the kernels */
-    int kernelSize = 0;
-    m_chargeSharingKernels = std::make_unique<ChargeSharingKernels>(m_inPixelBinCount[0], m_inPixelBinCount[1], m_inPixelBinCount[2], m_kernelSize);
-
-    verbose() << " -   Loading kernels from file lines ..." << endmsg;
-    while (std::getline(kernelFile, line)) {
-      if (line.empty() || line[0] == '#')
-        throw GaudiException("Empty or comment line found in kernel file at line " + std::to_string(lineNumber+1) + ". All lines (after 5 header lines) must contain valid kernel data.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-      
-      std::istringstream stringStream(line);
-      std::vector<std::string> lineEntries;
-      std::string entryString;
-
-      /* read the line & do sanity checks */
-      while (std::getline(stringStream, entryString, ' ')) {
-        if (!entryString.empty())
-          lineEntries.push_back(entryString);
-      }
-
-      if (kernelSize == 0)
-        kernelSize = static_cast<int>(std::sqrt(lineEntries.size() - 3)); // first 3 entries are bin indices
-      else if (kernelSize != static_cast<int>(std::sqrt(lineEntries.size() - 3)))
-        throw GaudiException("Invalid number of entries in kernel file at line " + std::to_string(lineNumber+1) + ": found " + std::to_string(lineEntries.size()) + " entries, expected " + std::to_string(3 + m_kernelSize * m_kernelSize) + " = 3 indices + kernelSize^2.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-
-      /* in-pixel bin of this kernel, given in first 3 columns */
-      int j_u = std::stoi(lineEntries[0]) - 1; // Allpix2 input is 1-indexed, sane people use 0-indexing
-      int j_v = std::stoi(lineEntries[1]) - 1;
-      int j_w = std::stoi(lineEntries[2]) - 1;
-
-      if (j_u < 0 || j_u >= m_inPixelBinCount[0] ||
-          j_v < 0 || j_v >= m_inPixelBinCount[1] ||
-          j_w < 0 || j_w >= m_inPixelBinCount[2]) {
-        throw GaudiException("Invalid in-pixel bin indices in kernel file at line " + std::to_string(lineNumber+1) + ": got (" + std::to_string(j_u) + ", " + std::to_string(j_v) + ", " + std::to_string(j_w) + "), but expected ranges are [0, " + std::to_string(m_inPixelBinCount[0]-1) + "], [0, " + std::to_string(m_inPixelBinCount[1]-1) + "], [0, " + std::to_string(m_inPixelBinCount[2]-1) + "].", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-      }
-
-      /* Parse kernel values & do sanity checks */
-      std::vector<float> kernelValues(m_kernelSize*m_kernelSize, 0.);
-      float kernelValueSum = 0.f;
-      for (int i = 0; i < m_kernelSize*m_kernelSize; i++) {
-        float entry = std::stof(lineEntries[3 + valueIndices[i]]); // NaN check done on sum
-        kernelValues[i] = entry;
-        kernelValueSum += entry;
-      } 
-
-      if (std::isnan(kernelValueSum))
-        throw GaudiException("NaN encountered in kernel for in-pixel bin (" + std::to_string(j_u) + ", " + std::to_string(j_v) + ", " + std::to_string(j_w) + ") at line " + std::to_string(lineNumber) + " in kernel file.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-
-      if (kernelValueSum < 0.f || kernelValueSum > 1.f + m_numericLimit_float) {
-        warning() << "Kernel for in-pixel bin (" << j_u << ", " << j_v << ", " << j_w << ") has invalid sum (" << kernelValueSum << ", must be in [0, 1]). Normalising to 1." << endmsg;
-        for (auto& value : kernelValues)
-          value /= kernelValueSum;
-      }
-
-      /* finalize this line, actually set the kernel */
-      debug() << " -     Parsed kernel for in-pixel bin (" << j_u << ", " << j_v << ", " << j_w << ") with entry sum " << std::to_string(kernelValueSum) << ", setting it now..." << endmsg;
-      kernelsSum += kernelValueSum;
-      m_chargeSharingKernels->SetKernel(j_u, j_v, j_w, kernelValues);
-      lineNumber++;
-
-    } // loop over lines with kernels
-
-    if (lineNumber - headerLines != m_inPixelBinCount[0] * m_inPixelBinCount[1] * m_inPixelBinCount[2])
-      throw GaudiException("Invalid number of kernels loaded from file: expected " + std::to_string(m_inPixelBinCount[0] * m_inPixelBinCount[1] * m_inPixelBinCount[2]) + " kernels (inferred from InPixelBinCount = [" + std::to_string(m_inPixelBinCount[0]) + ", " + std::to_string(m_inPixelBinCount[1]) + ", " + std::to_string(m_inPixelBinCount[2]) + "]), but got " + std::to_string(lineNumber - headerLines) + ".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-
-    kernelsSum /= static_cast<float>(lineNumber - headerLines);
-    info() << " - Loaded " << (lineNumber - headerLines) << " kernels from file. " << kernelsSum*100 << " percent of charge deposited in the sensor volume is collected by the pixels (the rest is lost, eg. due to being outside of depletion or due to trapping)." << endmsg;
-  } // if load from file
-}

@@ -91,8 +91,19 @@ private:
   
   /** @brief Class to store and access charge sharing kernels */
   class ChargeSharingKernels;
-  
-  // ---- Core algorithm functions ----
+
+  /* ---- Initialization & finalization functions ---- */
+
+  void initializeServicesAndGeometry();
+  void checkGaudiProperties();
+  void setupSensorParameters();
+  void loadKernels();
+  void setupDebugHistograms();
+  void setupDebugCsvOutput();
+
+  void printCountersSummary() const;
+
+  /* ---- Core algorithm functions ---- */
 
   /** @brief Initial checks before processing an event.
    * @return true if setup is OK and event can be processed, false if event has no simHits 
@@ -169,8 +180,6 @@ private:
 
   // -- Other helper functions --
 
-  void loadKernels();
-
   /** @brief Simply convert EDM4HEP vector to DD4HEP vector, and vice versa */
   dd4hep::rec::Vector3D convertVector(edm4hep::Vector3d vec) const;
   /** @copydoc convertVector(edm4hep::Vector3d) */
@@ -192,86 +201,68 @@ private:
 
   // -- Properties --
 
-  Gaudi::Property<std::string> m_subDetName{this, "SubDetectorName", "VXD", "Name of the subdetector"};
-  Gaudi::Property<bool> m_isStrip{this, "IsStrip", false, "Whether the hits are 1D strip hits"};
+  const std::string m_undefinedString = "UNDEFINED";
+
+  Gaudi::Property<std::string> m_subDetName{this, "SubDetectorName", m_undefinedString, "Name of the subdetector"};
   Gaudi::Property<std::string> m_geometryServiceName{this, "GeoSvcName", "GeoSvc", "The name of the GeoSvc instance"}; // what is this for?
   Gaudi::Property<std::string> m_encodingStringVariable{this, "EncodingStringParameterName", "GlobalTrackerReadoutID", "The name of the DD4hep constant that contains the Encoding string for tracking detectors"};
   
-  
-  Gaudi::Property<bool> m_cutDistanceToSurface{this, "CutDistanceToSurface", false, "Whether to cut simHits where the simHitPosition is not exactly on the DD4hep sensor simSurface."};
   Gaudi::Property<bool> m_cutPathOutsideSensor{this, "CutPathOutsideSensor", false, "Whether to cut simHits where the simHitPath is not on or inside the sensor."};
   Gaudi::Property<float> m_cutDepositedCharge{this, "CutDepositedCharge", 0.0, "Minimum charge (e-) of SimTrackerHit to be digitized"};
   
-  // Sensor pitch and size (enter either a single value for all layers or a vector, containing one value per layer)
-  Gaudi::Property<std::vector<double>> m_pixelPitch_u{this, "PixelPitch_u", {0.025}, "Pixel pitch in direction of u in mm; either one per layer or one for all layers"};
-  Gaudi::Property<std::vector<double>> m_pixelPitch_v{this, "PixelPitch_v", {0.025}, "Pixel pitch in direction of v in mm; either one per layer or one for all layers"};
-  Gaudi::Property<std::vector<int>> m_pixelCount_u{this, "PixelCount_u", {1024}, "Number of pixels in direction of u; either one per layer or one for all layers"};
-  Gaudi::Property<std::vector<int>> m_pixelCount_v{this, "PixelCount_v", {1024}, "Number of pixels in direction of v; either one per layer or one for all layers"};
-  Gaudi::Property<std::vector<double>> m_sensorThickness{this, "SensorThickness", {0.05}, "Sensor thickness in mm; either one per layer or one for all layers"};
-  
-  Gaudi::Property<int> m_layerCount{this, "LayerCount", 5, "Number of layers in the subdetector. Used to validate the size of the pixel pitch and count vectors."};
   Gaudi::Property<std::vector<int>> m_layersToDigitize{this, "LayersToDigitize", {}, "Which layers to digitize (0-indexed). If empty, all layers are digitized."};
 
-  Gaudi::Property<std::vector<int>> m_maxClusterSize{this, "MaximumClusterSize", {15,15}, "Maximum cluster size [max in u, max in v] in terms of pixels. Charges in pixels further that 1/2 max from the simHit pixel are discarded. This greatly improves performance. "};
-
+  Gaudi::Property<std::vector<int>> m_pixelCount_u{this, "PixelCount_u", {}, "Number of pixels in direction of u; either one per layer or one for all layers"};
+  Gaudi::Property<std::vector<int>> m_pixelCount_v{this, "PixelCount_v", {}, "Number of pixels in direction of v; either one per layer or one for all layers"};
+  
   Gaudi::Property<float> m_targetPathSegmentLength{this, "TargetPathSegmentLength", 0.002, "Length of the path segments, that the simHits path through a sensor is divided into. In mm. Defines the precision of the charge deposition along the path."};
   Gaudi::Property<float> m_pathLengthShorteningFactorGeant4{this, "PathLengthShorteningFactorGeant4", 1.05, "Relative path length (to Geant4 path length), above which the path is shortened to the Geant4 length. (Geant4 length includes multiple scattering and curling in B-field, which are lost in our linear approximation of the path)."};
   
+  Gaudi::Property<std::vector<int>> m_maxClusterSize{this, "MaximumClusterSize", {15,15}, "Default maximum cluster size [max in u, max in v] in terms of pixels. The area is expanded dynamically if charge is shared to pixels outside of this range, but this is computationally expensive."};
   Gaudi::Property<float> m_pixelThreshold{this, "PixelThreshold", 100, "Threshold in electrons for a pixel to fire (1 eh-pair = 3.65 eV)"};
   Gaudi::Property<float> m_electronicNoise{this, "PixelElectronicNoise", 20, "Electronic noise in electrons (1 eh-pair = 3.65 eV). Defines the width of the Gaussian noise added to each pixel."};
-  Gaudi::Property<float> m_timeSmearFactor{this, "PixelTimeSmear", 1.0, "Gaussian width for the time smearing applied on the pixel time. Applied for each digiHit individually."};
+  Gaudi::Property<float> m_timeSmearFactor{this, "PixelTimeSmear", 0., "Gaussian width for the time smearing applied on the pixel time. Applied for each digiHit individually."};
   
-  // Gaudi::Property<int> m_inPixelBinCount_u{this, "InPixelBinCount_u", 3, "Number of bins per pixel in u direction for charge deposition. Must agree with the imported Kernel map."};
-  // Gaudi::Property<int> m_inPixelBinCount_v{this, "InPixelBinCount_v", 3, "Number of bins per pixel in v direction for charge deposition. Must agree with the imported Kernel map."};
-  // Gaudi::Property<int> m_inPixelBinCount_w{this, "InPixelBinCount_w", 3, "Number of bins per pixel in w (vertical) direction for charge deposition. Must agree with the imported Kernel map."};
-  
-  // Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). Defaults to no transformation.
   Gaudi::Property<std::string> m_localNormalVectorDir{this, "LocalNormalVectorDir", "", "Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). If defined correctly, the local frame is transformed such that z is orthogonal to the sensor plane."};
 
-  // -- Kernel import properties --
-
+  /* Kernel import properties */
   Gaudi::Property<std::vector<float>> m_globalKernel{this, "GlobalKernel", {}, "Flat vector containing the global charge sharing kernel in row-major order (ie. row-by-row), starting on top left. Length must be KernelSize*KernelSize"};
-
   Gaudi::Property<std::string> m_kernelFileName{this, "KernelFileName", "", "Name of the file supplying the charge sharing kernel."};
-  Gaudi::Property<int> m_kernelSkipLines{this, "KernelSkipLines", 1, "Number of header lines to skip at the beginning of the kernel file."};
-  Gaudi::Property<std::string> m_kernelIndexColumns{this, "KernelIndexColumns", "+u,+v,+w", "Comma-separated list of the headers for the first three columns, ie. \"+u,-v,+w\", where a negative sign indicates that the binning runs in the negative direction."};
-  Gaudi::Property<std::string> m_kernelMatrixColumns{this, "KernelMatrixColumns", "row,+u,-v", "Comma-separated definition of the kernel matrix. First entry is either \"row\" or \"column\" to indicate if the matrix is stored row-by-row or column-by-column. Second and third entries encode the direction of the two matrix axes, eg. \"+u,-v\". A negative sign indicates that the binning runs in the negative direction. Defaults to row-dominated storage with first axis +u and second axis -v, similar to how matrices are stored in eg. WolframAlpha"};
 
-
+  /* Debugging */
   Gaudi::Property<bool> m_debugHistograms{this, "DebugHistograms", false, "Whether to create and fill debug histograms. Not recommended for multithreading, might lead to crashes."};
   Gaudi::Property<std::string> m_debugCsvFileName{this, "DebugCsvFileName", "", "Name of a CSV file to output detailed per-hit debug information. If empty, no debug output is created."};
 
-
-  // -- Services --
+  /* -- Services -- */
   
   SmartIF<IGeoSvc> m_geometryService;
-  // Decoder for the cellID
-  std::unique_ptr<dd4hep::DDSegmentation::BitFieldCoder> m_cellIDdecoder;
+  std::unique_ptr<dd4hep::DDSegmentation::BitFieldCoder> m_cellIDdecoder; // Decoder for the cellID
 
   dd4hep::VolumeManager m_volumeManager; // volume manager to get the physical cell sensitive volume
   SmartIF<IUniqueIDGenSvc> m_uidSvc;
 
   const dd4hep::rec::SurfaceMap* m_simSurfaceMap;
 
-  // -- Constants --
+  /* -- Constants -- */
 
   const float m_numericLimit_float = 0.00001f; // limit for floating point comparisons
   const double m_numericLimit_double = 0.000000001; // limit for floating point
-
   const float m_chargePerkeV = 273.97f; // number of electron-hole pairs created per keV of deposited energy in silicon. eh-pair ~ 3.65 eV
   
+  /* -- Detector & sensor parameters -- */
+
+  int m_layerCount;
   std::unordered_map<int, int> m_layerToIndex; // layer number (from cellID & m_layersToDigitize) to internal index (0...N-1, where N is the number of layers to digitize)
 
-  bool m_debugCsv = false; // whether to write debug CSV
-
-  mutable std::ofstream m_debugCsvFile; // debug output file. Only changed in intialize() and finalize(), otherwise only written to. **should** be more or less multi-thread safe, except for corrupted lines (I guess). ~ Jona 2025-10
+  std::vector<double> m_sensorThickness;
+  std::vector<double> m_pixelPitch_u;
+  std::vector<double> m_pixelPitch_v;
 
   int m_inPixelBinCount[3];
-
   int m_kernelSize;
   std::unique_ptr<ChargeSharingKernels> m_chargeSharingKernels; // the charge sharing kernel
 
-  // -- Accumulators --
+  /* -- Counters -- */
 
   mutable Gaudi::Accumulators::Counter<> m_counter_eventsRead{this, "Events read"};
   mutable Gaudi::Accumulators::Counter<> m_counter_eventsRejected_noSimHits{this, "Events rejected (no simHits)"};
@@ -280,11 +271,15 @@ private:
   mutable Gaudi::Accumulators::Counter<> m_counter_simHitsRead{this, "SimTrackerHits read"};
   mutable Gaudi::Accumulators::Counter<> m_counter_simHitsRejected_LayerNotToBeDigitized{this, "SimTrackerHits rejected (layer not to be digitized)"};
   mutable Gaudi::Accumulators::Counter<> m_counter_simHitsRejected_ChargeCut{this, "SimTrackerHits rejected (charge cut)"};
-  mutable Gaudi::Accumulators::Counter<> m_counter_simHitsRejected_SurfaceDistToLarge{this, "SimTrackerHits rejected (surface distance too large)"};
   mutable Gaudi::Accumulators::Counter<> m_counter_simHitsRejected_OutsideSensor{this, "SimTrackerHits rejected (outside sensor)"};
   mutable Gaudi::Accumulators::Counter<> m_counter_simHitsAccepted{this, "SimTrackerHits accepted"};
   mutable Gaudi::Accumulators::Counter<> m_counter_acceptedButNoSegmentsInSensor{this, "SimTrackerHits rejected (no segments in sensor)"};
   mutable Gaudi::Accumulators::Counter<> m_counter_digiHitsCreated{this, "DigiHits created"};
+
+  /* -- Debugging -- */
+
+  bool m_debugCsv = false; // create & write debug CSV file?
+  mutable std::ofstream m_debugCsvFile; // debug output file. Definitely not thread-safe.
 
   enum { 
     hist_simHitE, 
@@ -306,17 +301,14 @@ private:
     histArrayLen}; // histogram indices. histArrayLen must be last
   std::array<std::unique_ptr<Gaudi::Accumulators::StaticRootHistogram<1>>, histArrayLen> m_histograms; 
 
-enum { 
-  hist2d_hitMap_simHits,
-  hist2d_hitMap_digiHits, 
-  hist2d_pathLength_vs_simHit_v,
-  hist2d_pixelChargeMatrixSize,
-  hist2d_pathAngleToSensorNormal,
-  hist2dArrayLen }; // 2D histogram indices. hist2dArrayLen must be last
+  enum { 
+    hist2d_hitMap_simHits,
+    hist2d_hitMap_digiHits, 
+    hist2d_pathLength_vs_simHit_v,
+    hist2d_pixelChargeMatrixSize,
+    hist2d_pathAngleToSensorNormal,
+    hist2dArrayLen }; // 2D histogram indices. hist2dArrayLen must be last
   std::vector<std::array<std::unique_ptr<Gaudi::Accumulators::StaticRootHistogram<2>>, hist2dArrayLen>> m_histograms2d;
-
-
-  mutable std::unordered_set<int> m_initialSensorSizeCheckPassed; // whether the check that the pixel pitch and count match the sensor size in the geometry has been done and passed
 
   enum {
     histWeighted2d_averageCluster_rawCharge,
@@ -324,7 +316,7 @@ enum {
     histWeighted2dArrayLen };
   std::vector<std::array<std::unique_ptr<Gaudi::Accumulators::StaticWeightedHistogram<2, Gaudi::Accumulators::atomicity::full, double>>, histWeighted2dArrayLen>> m_histWeighted2d;
 
-  // TODO: implement having a kernel per layer (array of unique_ptr ?)
+  /* TODO: implement having a set of kernels per layer (array of unique_ptr ?) */
 };
 
 
@@ -376,10 +368,10 @@ class VTXdigi_Allpix2::HitInfo {
       m_length[0] = m_simSurface->length_along_u() * 10; // convert to mm
       m_length[1] = m_simSurface->length_along_v() * 10; // convert to mm
 
-      m_thickness = vtxdigi_AP2.m_sensorThickness.value().at(m_layerIndex);
+      m_thickness = vtxdigi_AP2.m_sensorThickness.at(m_layerIndex);
 
-      m_pixPitch[0] = vtxdigi_AP2.m_pixelPitch_u.value().at(m_layerIndex);
-      m_pixPitch[1] = vtxdigi_AP2.m_pixelPitch_v.value().at(m_layerIndex);
+      m_pixPitch[0] = vtxdigi_AP2.m_pixelPitch_u.at(m_layerIndex);
+      m_pixPitch[1] = vtxdigi_AP2.m_pixelPitch_v.at(m_layerIndex);
 
       m_pixCount[0] = vtxdigi_AP2.m_pixelCount_u.value().at(m_layerIndex);
       m_pixCount[1] = vtxdigi_AP2.m_pixelCount_v.value().at(m_layerIndex);
@@ -427,7 +419,7 @@ class VTXdigi_Allpix2::PixelChargeMatrix {
   const int m_overExpansionStep = 0; // number of extra pixels to expand the matrix by, when a charge is added outside the current bounds
   
   int m_range_u[2], m_range_v[2]; // Inclusive matrix range. -> size = range[1] - range[0] + 1
-  // CAN theoretically extend into negative values, this ensures graceful handling of hits outside inditial bounds. These might be discarded later, if outside of sensor.
+  /* range CAN theoretically extend into negative values, this ensures graceful handling of hits outside inditial bounds. These might be discarded later, if outside of sensor. */
   int m_origin[2]; // origin pixel indices
 
   public:
