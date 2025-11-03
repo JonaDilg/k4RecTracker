@@ -228,8 +228,6 @@ private:
   // Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). Defaults to no transformation.
   Gaudi::Property<std::string> m_localNormalVectorDir{this, "LocalNormalVectorDir", "", "Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). If defined correctly, the local frame is transformed such that z is orthogonal to the sensor plane."};
 
-  Gaudi::Property<int> m_kernelSize{this, "KernelSize", 3, "Size of the charge spreading kernel imported from Allpix2 (ie. 3 for 3x3 kernel) Must be an odd integer >= 3."};
-
   // -- Kernel import properties --
 
   Gaudi::Property<std::vector<float>> m_globalKernel{this, "GlobalKernel", {}, "Flat vector containing the global charge sharing kernel in row-major order (ie. row-by-row), starting on top left. Length must be KernelSize*KernelSize"};
@@ -270,6 +268,7 @@ private:
 
   int m_inPixelBinCount[3];
 
+  int m_kernelSize;
   std::unique_ptr<ChargeSharingKernels> m_chargeSharingKernels; // the charge sharing kernel
 
   // -- Accumulators --

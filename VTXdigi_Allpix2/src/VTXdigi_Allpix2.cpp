@@ -673,11 +673,11 @@ VTXdigi_Allpix2::PixelChargeMatrix VTXdigi_Allpix2::ShareCharge(HitInfo& hitInfo
 
       int i_u_target, i_v_target;
 
-      for (int i_m = -1*(m_kernelSize.value()-1)/2; i_m<=(m_kernelSize.value()-1)/2; i_m++) {
+      for (int i_m = -1*(m_kernelSize-1)/2; i_m<=(m_kernelSize-1)/2; i_m++) {
         i_u_target = i_u + i_m;
         if (i_u_target<0 || i_u_target>=hitInfo.pixCount(0)) continue;
 
-        for (int i_n = -1*(m_kernelSize.value()-1)/2; i_n<=(m_kernelSize.value()-1)/2; i_n++) {
+        for (int i_n = -1*(m_kernelSize-1)/2; i_n<=(m_kernelSize-1)/2; i_n++) {
           i_v_target = i_v + i_n;
           if (i_v_target<0 || i_v_target>=hitInfo.pixCount(1)) continue;
 
@@ -790,8 +790,7 @@ void VTXdigi_Allpix2::FillDebugHistograms(const HitInfo& hitInfo, const HitPosit
   const float totalChargeRaw = pixelChargeMatrix.GetTotalRawCharge();
   const float totalChargeMeasured = pixelChargeMatrix.GetTotalMeasuredCharge(m_pixelThreshold);
 
-
-
+  /* loop over pixelChargeMatrix */
   for (int i_u = pixelChargeMatrix.GetRangeMin_u(); i_u <= pixelChargeMatrix.GetRangeMax_u(); ++i_u) {
     for (int i_v = pixelChargeMatrix.GetRangeMin_v(); i_v <= pixelChargeMatrix.GetRangeMax_v(); ++i_v) {
 
@@ -1115,7 +1114,10 @@ void VTXdigi_Allpix2::loadKernels() {
     for (int i=0; i<3; i++)
       m_inPixelBinCount[i] = 10;
 
-    m_chargeSharingKernels = std::make_unique<ChargeSharingKernels>(m_inPixelBinCount[0], m_inPixelBinCount[1], m_inPixelBinCount[2], m_kernelSize.value());
+    m_kernelSize = static_cast<int>(std::sqrt(m_globalKernel.value().size()));
+    verbose() << " -   Using kernel size of " << m_kernelSize << " (from global kernel with " << m_globalKernel.value().size() << " entries)" << endmsg;
+
+    m_chargeSharingKernels = std::make_unique<ChargeSharingKernels>(m_inPixelBinCount[0], m_inPixelBinCount[1], m_inPixelBinCount[2], m_kernelSize);
 
     /* kernel size is checked in ChargeSharingKernel::SetAllKernels() */
     m_chargeSharingKernels->SetAllKernels(m_globalKernel.value());
@@ -1125,7 +1127,7 @@ void VTXdigi_Allpix2::loadKernels() {
     /* This implements parsing the default Allpix2 kernel file format. A general version was implemented in a previous commit (2025-11), but removed because the amount of options made it unneccessarily hard to validate and use. 
      * See https://indico.cern.ch/event/1489052/contributions/6475539/attachments/3063712/5418424/Allpix_workshop_Lemoine.pdf (slide 10) for more info on fields in the kernel file */
 
-    const int headerLines = 5;
+    const int headerLines = 5; // allpix2 kernel files have 5 header lines, and then a kernel per line
 
     info() << " -   Opening kernel file: " << m_kernelFileName.value() << ". Expecting Allpix2 format, defined in ChargePropagationWriter module." << endmsg;
     std::ifstream kernelFile(m_kernelFileName.value());
@@ -1158,6 +1160,16 @@ void VTXdigi_Allpix2::loadKernels() {
       m_inPixelBinCount[i] = std::stoi(headerLineEntries.at(7+i));
     verbose() << " -   found pixel-pitch of (" << pitch[0] << " x " << pitch[1] << ") um2, thickness of " << thickness << " um, and in-pixel bin count of (" << m_inPixelBinCount[0] << ", " << m_inPixelBinCount[1] << ", " << m_inPixelBinCount[2] << ")." << endmsg;
 
+    /* get the kernel size (5x5, 7x7, ...) from the length of the first line after the header */
+
+    if (std::getline(kernelFile, line)) {
+      m_kernelSize = static_cast<int>(std::sqrt(std::count(line.begin(), line.end(), ' ') - 2)); // not very robust, but works for valid Allpix2 files. first 3 entries are bin indices
+    }
+    else {
+      throw GaudiException("Could not read first kernel line after header in kernel file: " + m_kernelFileName.value(), "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+    }
+    verbose() << " -   Detected kernel size of " << m_kernelSize << " from first kernel line." << endmsg;
+
     /* set up mapping from Allpix2 kernel format
     *   (row-major, starts on bottom left)
     * to the format expected by the ChargeSharingKernels class 
@@ -1171,12 +1183,15 @@ void VTXdigi_Allpix2::loadKernels() {
       }
     }
 
-    /* check if we skipped all header lines */
-    if (lineNumber != headerLines) // lineNumber is 0-indexed, but encodes not the current but the next line to be read -> # lines read +1 -1  == header lines
-    throw GaudiException("Internal error: lineNumber (= " + std::to_string(lineNumber+1) + ") != headerLines (= " + std::to_string(headerLines) + ") after reading header lines.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+    /* reset the file and go to the beginning of the kernel data (after header) */
+    kernelFile.clear();
+    kernelFile.seekg(0, std::ios::beg);
+    for (int i=0; i<headerLines; ++i)
+      std::getline(kernelFile, line);
     
     /* loop over lines that contain a kernel each, set the kernels */
-    m_chargeSharingKernels = std::make_unique<ChargeSharingKernels>(m_inPixelBinCount[0], m_inPixelBinCount[1], m_inPixelBinCount[2], m_kernelSize.value());
+    int kernelSize = 0;
+    m_chargeSharingKernels = std::make_unique<ChargeSharingKernels>(m_inPixelBinCount[0], m_inPixelBinCount[1], m_inPixelBinCount[2], m_kernelSize);
 
     verbose() << " -   Loading kernels from file lines ..." << endmsg;
     while (std::getline(kernelFile, line)) {
@@ -1193,7 +1208,9 @@ void VTXdigi_Allpix2::loadKernels() {
           lineEntries.push_back(entryString);
       }
 
-      if (lineEntries.size() != static_cast<long unsigned int>(3 + m_kernelSize * m_kernelSize))
+      if (kernelSize == 0)
+        kernelSize = static_cast<int>(std::sqrt(lineEntries.size() - 3)); // first 3 entries are bin indices
+      else if (kernelSize != static_cast<int>(std::sqrt(lineEntries.size() - 3)))
         throw GaudiException("Invalid number of entries in kernel file at line " + std::to_string(lineNumber+1) + ": found " + std::to_string(lineEntries.size()) + " entries, expected " + std::to_string(3 + m_kernelSize * m_kernelSize) + " = 3 indices + kernelSize^2.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
 
       /* in-pixel bin of this kernel, given in first 3 columns */
