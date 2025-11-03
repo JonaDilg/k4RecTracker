@@ -867,18 +867,18 @@ std::tuple<int, int, int> VTXdigi_Allpix2::computeInPixelIndices(const dd4hep::r
   float inPixelPos_u = std::fmod(shiftedPos_u, pitch_u);
   if (inPixelPos_u < 0.0) inPixelPos_u += pitch_u; // ensure positive remainder
 
-  j_u = computeBinIndex(inPixelPos_u, 0.0, pitch_u / m_inPixelBinCount_u.value(), m_inPixelBinCount_u.value());
+  j_u = computeBinIndex(inPixelPos_u, 0.0, pitch_u / m_inPixelBinCount[0], m_inPixelBinCount[0]);
 
   float shiftedPos_v = segmentPos.y() + 0.5 * length_v;
   float pitch_v = m_pixelPitch_v.value().at(layerIndex);
   float inPixelPos_v = std::fmod(shiftedPos_v, pitch_v);
   if (inPixelPos_v < 0.0) inPixelPos_v += pitch_v;
 
-  j_v = computeBinIndex(inPixelPos_v, 0.0, pitch_v / m_inPixelBinCount_v.value(), m_inPixelBinCount_v.value());
+  j_v = computeBinIndex(inPixelPos_v, 0.0, pitch_v / m_inPixelBinCount[1], m_inPixelBinCount[1]);
 
   // vertical (w) binning: shift to [0, thickness]
   float shiftedPos_w = segmentPos.z() + 0.5 * m_sensorThickness.value().at(layerIndex);
-  j_w = computeBinIndex(shiftedPos_w, 0.0, m_sensorThickness.value().at(layerIndex) / m_inPixelBinCount_w.value(), m_inPixelBinCount_w.value());
+  j_w = computeBinIndex(shiftedPos_w, 0.0, m_sensorThickness.value().at(layerIndex) / m_inPixelBinCount[2], m_inPixelBinCount[2]);
 
   return std::make_tuple(j_u, j_v, j_w);
 } // computeInPixelIndices()
@@ -1104,217 +1104,139 @@ void VTXdigi_Allpix2::appendSimHitToCsv(const HitInfo& hitInfo, const HitPositio
 void VTXdigi_Allpix2::loadKernels() {
   verbose() << " - Importing charge sharing kernels..." << endmsg;
   
-  // sanity check
-  if (m_globalKernel.value().empty() && m_kernelFileName.value().empty()) {
+  /* sanity check */
+  if (m_globalKernel.value().empty() && m_kernelFileName.value().empty())
     throw GaudiException("No charge sharing kernel specified! Please provide either a global kernel or a kernel file.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-  }
 
-  m_chargeSharingKernels = std::make_unique<ChargeSharingKernels>(m_inPixelBinCount_u.value(), m_inPixelBinCount_v.value(), m_inPixelBinCount_w.value(), m_kernelSize.value());
-
-  // load kernels
-  if (!m_globalKernel.value().empty()) { // use global kernel
+  /* load kernels */
+  if (!m_globalKernel.value().empty()) { // use global kernel (mostly for debugging)
     debug() << " - Global kernel specified in <config>, applying this for all layers" << endmsg;
-  
-    // kernel size is checked in ChargeSharingKernel::SetAllKernels()
+
+    for (int i=0; i<3; i++)
+      m_inPixelBinCount[i] = 10;
+
+    m_chargeSharingKernels = std::make_unique<ChargeSharingKernels>(m_inPixelBinCount[0], m_inPixelBinCount[1], m_inPixelBinCount[2], m_kernelSize.value());
+
+    /* kernel size is checked in ChargeSharingKernel::SetAllKernels() */
     m_chargeSharingKernels->SetAllKernels(m_globalKernel.value());
   }
   else { // load from file
     debug() << " - Loading kernels from file: " << m_kernelFileName.value() << endmsg;
+    /* This implements parsing the default Allpix2 kernel file format. A general version was implemented in a previous commit (2025-11), but removed because the amount of options made it unneccessarily hard to validate and use. 
+     * See https://indico.cern.ch/event/1489052/contributions/6475539/attachments/3063712/5418424/Allpix_workshop_Lemoine.pdf (slide 10) for more info on fields in the kernel file */
 
-    /* Kernel file: the first 3 columns contain in-pixel bin indices j_u, j_v, j_w, in some order.
-     * The ordering of the columns is defined in m_kernelIndexColumns, need to decode this into usable indices. */
+    const int headerLines = 5;
 
-    std::string binIndicesStr = m_kernelIndexColumns.value();
-    if (binIndicesStr.length() != 8)
-      throw GaudiException("Invalid kernelIndexColumns: " + binIndicesStr + ". Must be 8 characters long, to form a string like \"+u,-v,+w\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-    for (int i=0; i<3; i++) {
-      if (binIndicesStr[3*i] != '+' && binIndicesStr[3*i] != '-')
-        throw GaudiException("Invalid kernelIndexColumns: " + binIndicesStr + ". Each of the 3 entries must start with '+' or '-', to form a string like \"+u,-v,+w\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-      if (binIndicesStr[3*i+1] != 'u' && binIndicesStr[3*i+1] != 'v' && binIndicesStr[3*i+1] != 'w')
-        throw GaudiException("Invalid kernelIndexColumns: " + binIndicesStr + ". Each of the 3 entries must contain 'u', 'v' or 'w' as second character, to form a string like \"+u,-v,+w\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-    }
-    if (binIndicesStr[2] != ',' || binIndicesStr[5] != ',') 
-      throw GaudiException("Invalid kernelIndexColumns: " + binIndicesStr + ". Entries must be separated by commas, to form a string like \"+u,-v,+w\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-
-    int binIndices[3] = {0,0,0}; // binIndices[0] = column, where the j_u index is found
-    bool binsInverted[3] = {false, false, false}; // whether the bin indices are inverted (i.e. start from max index and go to 0)
-    for (int index=0; index<3; index++) {
-      const char sign = binIndicesStr[3*index];
-      if (sign == '-')
-        binsInverted[index] = true;
-
-      const char coord = binIndicesStr[3*index + 1];
-      if (coord == 'u')
-        binIndices[0] = index;
-      else if (coord == 'v')
-        binIndices[1] = index;
-      else if (coord == 'w')
-        binIndices[2] = index;
-    }
-
-    if (binIndices[0] + binIndices[1] + binIndices[2] != 3)
-      throw GaudiException("Invalid kernelIndexColumns: " + binIndicesStr + ". Each of 'u', 'v' and 'w' must be specified exactly once, to form a string like \"+u,-v,+w\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-
-    info() << " - Kernel index columns: j_u in col " << binIndices[0] << (binsInverted[0] ? " (inverted)" : "") << "   - j_v in column " << binIndices[1] << (binsInverted[1] ? " (inverted)" : "") << "   - j_w in column " << binIndices[2] << (binsInverted[2] ? " (inverted)" : "") << endmsg;
-
-    /* The following (KernelSize x KernelSize) entries contain the charge sharing kernel.
-     * The ordering of the entries is defined in m_kernelMatrixColumns, we need to decode this into usable indices as well.
-     * ChargeSharingKernels expects the entries to be in row-major order, top-to-bottom ordering.
-     * We need to re-sort the entries accordingly. */
-
-    std::string valueIndicesStr = m_kernelMatrixColumns.value();
-
-    if (valueIndicesStr.length() != 9)
-      throw GaudiException("Invalid kernelMatrixColumns: " + valueIndicesStr + ". Must be 9 characters long, to form a string like \"col,+u,-v\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-    bool rowMajor;
-    if ( std::strncmp(valueIndicesStr.substr(0,4).c_str(), "row,", 4) == 0 )
-      rowMajor = true;
-    else if ( std::strncmp(valueIndicesStr.substr(0,4).c_str(), "col,", 4) == 0 )
-      rowMajor = false;
-    else
-      throw GaudiException("Invalid kernelMatrixColumns: " + valueIndicesStr + ". Must start with \"row,\" or \"col,\" to form a string like \"row,+u,-v\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-    if (valueIndicesStr[6] != ',' )
-      throw GaudiException("Invalid kernelMatrixColumns: " + valueIndicesStr + ". Entries must be separated by commas, to form a string like \"col,+u,-v\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-    for (int i=0; i<2; i++) {
-      if (valueIndicesStr[4 + 3*i] != '+' && valueIndicesStr[4 + 3*i] != '-')
-        throw GaudiException("Invalid kernelMatrixColumns: " + valueIndicesStr + ". Each of the 2 positional entries must start with '+' or '-', to form a string like \"col,+u,-v\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-      if (valueIndicesStr[5 + 3*i] != 'u' && valueIndicesStr[5 + 3*i] != 'v')
-        throw GaudiException("Invalid kernelMatrixColumns: " + valueIndicesStr + ". Each of the 2 positional entries must contain 'u' or 'v' as second character, to form a string like \"col,+u,-v\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-    }
-
-    bool matrixAxesSwapped; // false <=> {u in horizontal, v in vertical} directions in the kernel matrix. true <=> {u in vertical, v in horizontal}
-    bool matrixAxesInverted[2]; // matrixAxesInverted[0] = false <=> horizontal axis counts left-to-right. true means right-to-left. Same for matrixAxesInverted[1] = false <=> bottom-to-top.
-    /* I feel what I do here carries redundant information.
-     * (because if u is horizontal, v must be vertical, and vice versa.)
-     * (also because if colMajor can be described by swapping u and v, and their signs)
-     * But this way the behaviour is much clearer. 
-     * It's not executed in event loop, so performace does not matter anyway ~ Jona 2025-10 */
-
-    if (valueIndicesStr[5] == 'u' && valueIndicesStr[8] == 'v')
-      matrixAxesSwapped = false;
-    else if (valueIndicesStr[5] == 'v' && valueIndicesStr[8] == 'u')
-      matrixAxesSwapped = true;
-    else
-      throw GaudiException("Invalid kernelMatrixColumns: " + valueIndicesStr + ". Each of 'u' and 'v' must be specified exactly once, to form a string like \"col,+u,-v\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-
-    if (valueIndicesStr[4] == '+')
-      matrixAxesInverted[0] = false;
-    else if (valueIndicesStr[4] == '-')
-      matrixAxesInverted[0] = true;
-    else
-      throw GaudiException("Invalid kernelMatrixColumns: " + valueIndicesStr + ". Each of the 2 positional entries must start with '+' or '-', to form a string like \"col,+u,-v\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE); 
-
-    if (valueIndicesStr[7] == '+')  
-      matrixAxesInverted[1] = false;
-    else if (valueIndicesStr[7] == '-')
-      matrixAxesInverted[1] = true;
-    else
-      throw GaudiException("Invalid kernelMatrixColumns: " + valueIndicesStr + ". Each of the 2 positional entries must start with '+' or '-', to form a string like \"col,+u,-v\".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
-
-    std::vector<int> valueIndices(m_kernelSize*m_kernelSize, 0.); // valueIndices[i] = column where the i-th kernel entry is found, in the order expected by ChargeSharingKernels
-
-    for (int i = 0; i < m_kernelSize*m_kernelSize; i++) {
-      int i_u, i_v;
-      if (matrixAxesSwapped) {
-        i_u = i/m_kernelSize;
-        i_v = i%m_kernelSize ;
-      }
-      else {
-        i_u = i%m_kernelSize;
-        i_v = i/m_kernelSize;
-      }
-
-      if (matrixAxesInverted[0]) 
-        i_u = m_kernelSize - 1 - i_u;
-      if (!matrixAxesInverted[1]) // vertical axis is counted bottom-to-top by default, so invert if necessary
-        i_v = m_kernelSize - 1 - i_v;
-
-      if (rowMajor)
-        valueIndices[i] = i_u + m_kernelSize * i_v;
-      else
-        valueIndices[i] = i_v + m_kernelSize * i_u;
-    } // loop over kernel entries,  set entries
-
-    std::string debugValueIndices;
-    for (const auto& index : valueIndices)
-      debugValueIndices += std::to_string(index) + " ";
-    info() << " - Kernel matrix value columns set:" << endmsg;
-    info() << "   - " << debugValueIndices << endmsg;
-
-    // -- finally, load the kernels from file --
-
-    info() << " - Opening kernel file: " << m_kernelFileName.value() << endmsg;
+    info() << " -   Opening kernel file: " << m_kernelFileName.value() << ". Expecting Allpix2 format, defined in ChargePropagationWriter module." << endmsg;
     std::ifstream kernelFile(m_kernelFileName.value());
     if (!kernelFile.is_open())
       throw GaudiException("Could not open kernel file: " + m_kernelFileName.value(), "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
 
     std::string line;
-    int lineNumber = 0;
+    int lineNumber = 0; // next line to be read (0-indexed)
     float kernelsSum = 0.f;
 
+    /* loading pixel-pitch, thickness and in-pixel bin counts from header (all in 5th line) */
+    for (; lineNumber < 5; ++lineNumber)
+      std::getline(kernelFile, line);
+
+    std::istringstream headerStringStream(line);
+    std::string headerEntry;
+    std::vector<std::string> headerLineEntries;
+
+    while (std::getline(headerStringStream, headerEntry, ' ')) {
+      if (!headerEntry.empty())
+        headerLineEntries.push_back(headerEntry);
+    }
+
+    if (headerLineEntries.size() != 11)
+      throw GaudiException("Invalid number of entries in kernel file at header line 5: found " + std::to_string(headerLineEntries.size()) + " entries, expected 11.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+
+    float thickness = std::stof(headerLineEntries.at(0));
+    float pitch[2] = { std::stof(headerLineEntries.at(1)), std::stof(headerLineEntries.at(2)) };
+    for (int i=0; i<3; i++)
+      m_inPixelBinCount[i] = std::stoi(headerLineEntries.at(7+i));
+    verbose() << " -   found pixel-pitch of (" << pitch[0] << " x " << pitch[1] << ") um2, thickness of " << thickness << " um, and in-pixel bin count of (" << m_inPixelBinCount[0] << ", " << m_inPixelBinCount[1] << ", " << m_inPixelBinCount[2] << ")." << endmsg;
+
+    /* set up mapping from Allpix2 kernel format
+    *   (row-major, starts on bottom left)
+    * to the format expected by the ChargeSharingKernels class 
+    *   (row-major, starts on top-left) */
+    std::vector<int> valueIndices(m_kernelSize*m_kernelSize, 0); // i: index in local format; valueIndices[i]: index in Allpix2 format
+    for (int i_u = 0; i_u < m_kernelSize; i_u++) {
+      for (int i_v = 0; i_v < m_kernelSize; i_v++) {
+        int i_allpix2 = i_u + (m_kernelSize - 1 - i_v) * m_kernelSize;
+        int i_local = i_u + i_v * m_kernelSize;
+        valueIndices[i_local] = i_allpix2;
+      }
+    }
+
+    /* check if we skipped all header lines */
+    if (lineNumber != headerLines) // lineNumber is 0-indexed, but encodes not the current but the next line to be read -> # lines read +1 -1  == header lines
+    throw GaudiException("Internal error: lineNumber (= " + std::to_string(lineNumber+1) + ") != headerLines (= " + std::to_string(headerLines) + ") after reading header lines.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+    
+    /* loop over lines that contain a kernel each, set the kernels */
+    m_chargeSharingKernels = std::make_unique<ChargeSharingKernels>(m_inPixelBinCount[0], m_inPixelBinCount[1], m_inPixelBinCount[2], m_kernelSize.value());
+
+    verbose() << " -   Loading kernels from file lines ..." << endmsg;
     while (std::getline(kernelFile, line)) {
-
-      // skip header lines
-      if (lineNumber < m_kernelSkipLines.value()) {
-        lineNumber++;
-        continue;
-      }
-
       if (line.empty() || line[0] == '#')
-        throw GaudiException("Empty or comment line found in kernel file at line " + std::to_string(lineNumber) + ". All lines after header must contain valid kernel data.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+        throw GaudiException("Empty or comment line found in kernel file at line " + std::to_string(lineNumber+1) + ". All lines (after 5 header lines) must contain valid kernel data.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
       
-      std::istringstream stringstream(line);
-      std::string entry;
+      std::istringstream stringStream(line);
       std::vector<std::string> lineEntries;
-      int nEntries = 0;
+      std::string entryString;
 
-      while (std::getline(stringstream, entry, ' ')) {
-        if (!entry.empty()) {
-          lineEntries.push_back(entry);
-        }
-        nEntries++;
+      /* read the line & do sanity checks */
+      while (std::getline(stringStream, entryString, ' ')) {
+        if (!entryString.empty())
+          lineEntries.push_back(entryString);
       }
 
-      if (nEntries != 3 + m_kernelSize * m_kernelSize)
-        throw GaudiException("Invalid number of entries in kernel file at line " + std::to_string(lineNumber) + ": found " + std::to_string(nEntries) + " entries, expected " + std::to_string(3 + m_kernelSize * m_kernelSize) + " = 3 indices + kernelSize^2.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
- 
-      int j_u = std::stoi(lineEntries[binIndices[0]]) - 1; // Allpix2 indices start from 1
-      int j_v = std::stoi(lineEntries[binIndices[1]]) - 1;
-      int j_w = std::stoi(lineEntries[binIndices[2]]) - 1;
-      if (binsInverted[0])
-        j_u = m_inPixelBinCount_u.value() - 1 - j_u;
-      if (binsInverted[1])
-        j_v = m_inPixelBinCount_v.value() - 1 - j_v;
-      if (binsInverted[2])
-        j_w = m_inPixelBinCount_w.value() - 1 - j_w;
+      if (lineEntries.size() != static_cast<long unsigned int>(3 + m_kernelSize * m_kernelSize))
+        throw GaudiException("Invalid number of entries in kernel file at line " + std::to_string(lineNumber+1) + ": found " + std::to_string(lineEntries.size()) + " entries, expected " + std::to_string(3 + m_kernelSize * m_kernelSize) + " = 3 indices + kernelSize^2.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
 
+      /* in-pixel bin of this kernel, given in first 3 columns */
+      int j_u = std::stoi(lineEntries[0]) - 1; // Allpix2 input is 1-indexed, sane people use 0-indexing
+      int j_v = std::stoi(lineEntries[1]) - 1;
+      int j_w = std::stoi(lineEntries[2]) - 1;
+
+      if (j_u < 0 || j_u >= m_inPixelBinCount[0] ||
+          j_v < 0 || j_v >= m_inPixelBinCount[1] ||
+          j_w < 0 || j_w >= m_inPixelBinCount[2]) {
+        throw GaudiException("Invalid in-pixel bin indices in kernel file at line " + std::to_string(lineNumber+1) + ": got (" + std::to_string(j_u) + ", " + std::to_string(j_v) + ", " + std::to_string(j_w) + "), but expected ranges are [0, " + std::to_string(m_inPixelBinCount[0]-1) + "], [0, " + std::to_string(m_inPixelBinCount[1]-1) + "], [0, " + std::to_string(m_inPixelBinCount[2]-1) + "].", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+      }
+
+      /* Parse kernel values & do sanity checks */
       std::vector<float> kernelValues(m_kernelSize*m_kernelSize, 0.);
       float kernelValueSum = 0.f;
       for (int i = 0; i < m_kernelSize*m_kernelSize; i++) {
-        int valueIndex = valueIndices[i];
-        kernelValues[i] = std::stof(lineEntries[3 + valueIndex]);
-        kernelValueSum += kernelValues[i];
-      }
-      // normalize kernel
+        float entry = std::stof(lineEntries[3 + valueIndices[i]]); // NaN check done on sum
+        kernelValues[i] = entry;
+        kernelValueSum += entry;
+      } 
+
       if (std::isnan(kernelValueSum))
         throw GaudiException("NaN encountered in kernel for in-pixel bin (" + std::to_string(j_u) + ", " + std::to_string(j_v) + ", " + std::to_string(j_w) + ") at line " + std::to_string(lineNumber) + " in kernel file.", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+
       if (kernelValueSum < 0.f || kernelValueSum > 1.f + m_numericLimit_float) {
-        warning() << " - Kernel for in-pixel bin (" << j_u << ", " << j_v << ", " << j_w << ") has invalid sum (" << kernelValueSum << ", must be in [0, 1]). Normalising to 1." << endmsg;
+        warning() << "Kernel for in-pixel bin (" << j_u << ", " << j_v << ", " << j_w << ") has invalid sum (" << kernelValueSum << ", must be in [0, 1]). Normalising to 1." << endmsg;
         for (auto& value : kernelValues)
           value /= kernelValueSum;
       }
+
+      /* finalize this line, actually set the kernel */
+      debug() << " -     Parsed kernel for in-pixel bin (" << j_u << ", " << j_v << ", " << j_w << ") with entry sum " << std::to_string(kernelValueSum) << ", setting it now..." << endmsg;
       kernelsSum += kernelValueSum;
-
-      debug() << " - Loaded kernel for in-pixel bin (" << j_u << ", " << j_v << ", " << j_w << ") with entry sum " << kernelValueSum << ", setting it now." << endmsg;
       m_chargeSharingKernels->SetKernel(j_u, j_v, j_w, kernelValues);
-      
       lineNumber++;
-    } // loop over lines in file
 
-    if (lineNumber - m_kernelSkipLines != m_inPixelBinCount_u.value() * m_inPixelBinCount_v.value() * m_inPixelBinCount_w.value()) 
-      throw GaudiException("Invalid number of kernels loaded from file: expected " + std::to_string(m_inPixelBinCount_u.value() * m_inPixelBinCount_v.value() * m_inPixelBinCount_w.value()) + " from InPixelBinCount = [" + std::to_string(m_inPixelBinCount_u.value()) + ", " + std::to_string(m_inPixelBinCount_v.value()) + ", " + std::to_string(m_inPixelBinCount_w.value()) + "], but got " + std::to_string(lineNumber - m_kernelSkipLines.value()) + ".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+    } // loop over lines with kernels
 
-    kernelsSum /= static_cast<float>(lineNumber - m_kernelSkipLines);
-    info() << " - Loaded " << (lineNumber - m_kernelSkipLines) << " kernels from file. " << kernelsSum*100 << " percent of charge deposited in the sensor volume is collected by the pixels (the rest is lost, eg. due to being outside of depletion or due to trapping)." << endmsg;
+    if (lineNumber - headerLines != m_inPixelBinCount[0] * m_inPixelBinCount[1] * m_inPixelBinCount[2])
+      throw GaudiException("Invalid number of kernels loaded from file: expected " + std::to_string(m_inPixelBinCount[0] * m_inPixelBinCount[1] * m_inPixelBinCount[2]) + " kernels (inferred from InPixelBinCount = [" + std::to_string(m_inPixelBinCount[0]) + ", " + std::to_string(m_inPixelBinCount[1]) + ", " + std::to_string(m_inPixelBinCount[2]) + "]), but got " + std::to_string(lineNumber - headerLines) + ".", "VTXdigi_Allpix2::loadKernels()", StatusCode::FAILURE);
+
+    kernelsSum /= static_cast<float>(lineNumber - headerLines);
+    info() << " - Loaded " << (lineNumber - headerLines) << " kernels from file. " << kernelsSum*100 << " percent of charge deposited in the sensor volume is collected by the pixels (the rest is lost, eg. due to being outside of depletion or due to trapping)." << endmsg;
   } // if load from file
 }

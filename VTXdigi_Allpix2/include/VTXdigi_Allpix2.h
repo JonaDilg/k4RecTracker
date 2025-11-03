@@ -221,9 +221,9 @@ private:
   Gaudi::Property<float> m_electronicNoise{this, "PixelElectronicNoise", 20, "Electronic noise in electrons (1 eh-pair = 3.65 eV). Defines the width of the Gaussian noise added to each pixel."};
   Gaudi::Property<float> m_timeSmearFactor{this, "PixelTimeSmear", 1.0, "Gaussian width for the time smearing applied on the pixel time. Applied for each digiHit individually."};
   
-  Gaudi::Property<int> m_inPixelBinCount_u{this, "InPixelBinCount_u", 3, "Number of bins per pixel in u direction for charge deposition. Must agree with the imported Kernel map."};
-  Gaudi::Property<int> m_inPixelBinCount_v{this, "InPixelBinCount_v", 3, "Number of bins per pixel in v direction for charge deposition. Must agree with the imported Kernel map."};
-  Gaudi::Property<int> m_inPixelBinCount_w{this, "InPixelBinCount_w", 3, "Number of bins per pixel in w (vertical) direction for charge deposition. Must agree with the imported Kernel map."};
+  // Gaudi::Property<int> m_inPixelBinCount_u{this, "InPixelBinCount_u", 3, "Number of bins per pixel in u direction for charge deposition. Must agree with the imported Kernel map."};
+  // Gaudi::Property<int> m_inPixelBinCount_v{this, "InPixelBinCount_v", 3, "Number of bins per pixel in v direction for charge deposition. Must agree with the imported Kernel map."};
+  // Gaudi::Property<int> m_inPixelBinCount_w{this, "InPixelBinCount_w", 3, "Number of bins per pixel in w (vertical) direction for charge deposition. Must agree with the imported Kernel map."};
   
   // Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). Defaults to no transformation.
   Gaudi::Property<std::string> m_localNormalVectorDir{this, "LocalNormalVectorDir", "", "Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). If defined correctly, the local frame is transformed such that z is orthogonal to the sensor plane."};
@@ -267,6 +267,8 @@ private:
   bool m_debugCsv = false; // whether to write debug CSV
 
   mutable std::ofstream m_debugCsvFile; // debug output file. Only changed in intialize() and finalize(), otherwise only written to. **should** be more or less multi-thread safe, except for corrupted lines (I guess). ~ Jona 2025-10
+
+  int m_inPixelBinCount[3];
 
   std::unique_ptr<ChargeSharingKernels> m_chargeSharingKernels; // the charge sharing kernel
 
