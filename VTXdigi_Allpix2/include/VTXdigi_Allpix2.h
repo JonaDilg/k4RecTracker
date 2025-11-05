@@ -13,9 +13,6 @@
 #include "edm4hep/TrackerHitPlaneCollection.h" // added by Jona
 #include "edm4hep/TrackerHitSimTrackerHitLinkCollection.h" // added by Jona
 
-
-// #include "edm4hep/TrackerHit3DCollection.h"
-
 // K4FWCORE
 // #include "k4FWCore/DataHandle.h"
 #include "k4Interface/IGeoSvc.h"
@@ -25,8 +22,6 @@
 
 // DD4HEP
 #include "DDRec/SurfaceManager.h"
-// #include "DD4hep/Detector.h" // for dd4hep::VolumeManager
-// #include "DDRec/Vector3D.h"
 
 #include "TRandom2.h"
 
@@ -71,9 +66,10 @@ struct VTXdigi_Allpix2 final
 
 private: 
 
-  // -- Classes used internally --
+  /* -- Classes used internally -- */
 
-  /** @brief Class to store relevant quantities about a simHit */
+  /** @brief Class to store relevant quantities about a simHit 
+   * @note Content is defined in constructor, cannot be modified afterwards. The exceptions are nSegments and the debugFlag. */
   class HitInfo; 
   friend class HitInfo;
 
@@ -83,6 +79,16 @@ private:
     dd4hep::rec::Vector3D path;
     dd4hep::rec::Vector3D global;
     dd4hep::rec::Vector3D local;
+  };
+
+  /** @brief Struct to store the indices of a path segment */
+  struct SegmentIndices {
+    int i_u = -1, i_v = -1;
+    int j_u = -1, j_v = -1, j_w = -1;
+
+    inline bool operator==(const SegmentIndices& other) const {
+      return (i_u == other.i_u) && (i_v == other.i_v) && (j_u == other.j_u) && (j_v == other.j_v) && (j_w == other.j_w);
+    }
   };
 
   /** @brief Class to store the charge deposited in each pixel around the simHit. 
@@ -125,19 +131,19 @@ private:
   /** @brief Loop over the path segments and share each segments deposited charge among its neighbors according to the charge sharing kernels.
    * @return A PixelChargeMatrix containing the charge deposited in each pixel around the simHit.
    * @note Noise has not yet been generated for the pixelChargeMatrix. */
-  PixelChargeMatrix ShareCharge(HitInfo& hitInfo, const HitPosition& hitPos) const;
+  PixelChargeMatrix DepositAndCollectCharge(HitInfo& hitInfo, const HitPosition& hitPos) const;
 
   /** @brief Find pixels with charge above threshold in pixelChargeMatrix, create digiHits and fill digiHits and digiHitsLinks collections */
-  void AnalyseSharedCharge(const HitInfo& hitInfo, const PixelChargeMatrix& pixelChargeMatrix, const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks) const;
+  void AnalyseSharedCharge(const HitInfo& hitInfo, const HitPosition& hitPos, const PixelChargeMatrix& pixelChargeMatrix, const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks) const;
   
   /** @brief Fill debug histograms.
    * @note Contains a very similar loop to AnalyseSharedCharge, but does not create digiHits. This optimises performance with debug histograms disabled.*/
-  void FillDebugHistograms(const HitInfo& hitInfo, const HitPosition& hitPos, const PixelChargeMatrix& pixelChargeMatrix) const;
+  void FillGeneralDebugHistograms(HitInfo& hitInfo, const HitPosition& hitPos, const PixelChargeMatrix& pixelChargeMatrix) const;
 
 
-  // ---- Helper functions (called by core algorithm functions) ----
+  /* ---- Helper functions (called by core algorithm functions) ---- */
 
-  // -- Pixel and in-pixel binning magic (logic) --
+  /* -- Pixel and in-pixel binning magic (logic) -- */
 
   /** @brief Given a histogram definition (x0, binWidth, nBins) and a value x, compute the bin index i in which x falls.
    * @return Int, -1 if x is out of range.
@@ -156,10 +162,10 @@ private:
   
   /** @brief Find the in-pixel indices (j_u, j_v, j_w) for a given (local) position inside the pixel and layer index
    *  @note Assumption: each layer has only 1 type if sensor */
-  std::tuple<int, int, int, int, int> computeSegmentIndices(HitInfo& hitInfo, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const int segment) const;
+  SegmentIndices computeSegmentIndices(HitInfo& hitInfo, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const int segment) const;
 
 
-  // -- Transformation between global frame and local sensor frame -- 
+  /* -- Transformation between global frame and local sensor frame -- */
 
   /** @brief Computes the transformation matrix to the local sensor frame */
   TGeoHMatrix computeTransformationMatrix(const edm4hep::SimTrackerHit& simHit) const;
@@ -178,7 +184,7 @@ private:
   dd4hep::rec::Vector3D transformLocalToGlobal(const dd4hep::rec::Vector3D& localPos, const dd4hep::DDSegmentation::CellID& cellID) const;
 
 
-  // -- Other helper functions --
+  /* -- Other helper functions -- */
 
   /** @brief Simply convert EDM4HEP vector to DD4HEP vector, and vice versa */
   dd4hep::rec::Vector3D convertVector(edm4hep::Vector3d vec) const;
@@ -192,14 +198,19 @@ private:
   /** @brief Calculate the clipping factors for the path of a simHit in local sensor frame. Called in constructSimHitPath() */
   std::tuple<float, float> computePathClippingFactors(float t_min, float t_max, const float entryPos_ax, const float pathLength_ax, const float sensorLength_ax) const;
 
+  void collectSegmentCharge(HitInfo& hitInfo, PixelChargeMatrix& pixelChargeMatrix, const SegmentIndices& segment, const float segmentCharge) const;
+
   /** @brief Create a digitized hit*/
   void createDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const dd4hep::rec::Vector3D& position, const float charge) const;
 
   /** @brief Write simHit & path information to the debugging CSV file. Definitely not thread-safe. */
   void appendSimHitToCsv(const HitInfo& hitInfo, const HitPosition& hitPos, const int i_u, const int i_v) const;
+
+  void fillDebugHistograms_segmentLoop(const HitInfo& hitInfo, const SegmentIndices& segment, int i_m, int i_n, const float sharedCharge) const;
+  void fillDebugHistograms_targetPixelLoop(const HitInfo& hitInfo, const HitPosition& hitPos, int i_u, int i_v, float pixelChargeMeasured) const;
   
 
-  // -- Properties --
+  /* -- Properties -- */
 
   const std::string m_undefinedString = "UNDEFINED";
 
@@ -311,18 +322,14 @@ private:
   std::vector<std::array<std::unique_ptr<Gaudi::Accumulators::StaticRootHistogram<2>>, hist2dArrayLen>> m_histograms2d;
 
   enum {
-    histWeighted2d_averageCluster_rawCharge,
-    histWeighted2d_averageCluster_measuredCharge,
+    histWeighted2d_averageCluster,
+    histWeighted2d_chargeOriginU,
+    histWeighted2d_chargeOriginV,
     histWeighted2dArrayLen };
   std::vector<std::array<std::unique_ptr<Gaudi::Accumulators::StaticWeightedHistogram<2, Gaudi::Accumulators::atomicity::full, double>>, histWeighted2dArrayLen>> m_histWeighted2d;
 
   /* TODO: implement having a set of kernels per layer (array of unique_ptr ?) */
 };
-
-
-
-
-
 
 class VTXdigi_Allpix2::HitInfo {
   bool m_debugFlag = false; // set to true for hits that should be logged in the debug CSV output
@@ -671,11 +678,14 @@ class VTXdigi_Allpix2::ChargeSharingKernels {
     */
     float GetWeight(int j_u, int j_v, int j_w, int j_col, int j_row) const {
       if (abs(j_col) > (m_kernelSize-1)/2)
-        throw std::runtime_error("GetKernelEntry: j_col (=" + std::to_string(j_col) + ") out of range");
+        throw std::runtime_error("GetKernelEntry(): j_col (=" + std::to_string(j_col) + ") out of range of kernel size.");
       if (abs(j_row) > (m_kernelSize-1)/2)
-        throw std::runtime_error("GetKernelEntry: j_row (=" + std::to_string(j_row) + ") out of range");
+        throw std::runtime_error("GetKernelEntry(): j_row (=" + std::to_string(j_row) + ") out of range of kernel size.");
       const auto& kernel = GetKernel(j_u, j_v, j_w);
       return kernel[(j_col + (m_kernelSize-1)/2) * m_kernelSize + (j_row + (m_kernelSize-1)/2)];
+    }
+    float GetWeight(const VTXdigi_Allpix2::SegmentIndices& segment, int i_col, int i_row) const {
+      return GetWeight(segment.j_u, segment.j_v, segment.j_w, i_col, i_row);
     }
 
     inline int GetSize() const {
