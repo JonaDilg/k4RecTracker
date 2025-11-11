@@ -27,10 +27,10 @@ DECLARE_COMPONENT(VTXdigi_Allpix2)
 
 VTXdigi_Allpix2::VTXdigi_Allpix2(const std::string& name, ISvcLocator* svcLoc)
     : MultiTransformer(name, svcLoc,
-                       {KeyValues("SimTrackHitCollectionName", {"SimTrackerHits"}),
-                        KeyValues("HeaderName", {"EventHeader"}),},
-                       {KeyValues("TrackerHitCollectionName", {"VTXTrackerHits"}),
-                        KeyValues("SimTrkHitRelationsCollection", {"VTXTrackerHitRelations"})}) {
+                       {KeyValues("SimTrackHitCollectionName", {"UNDEFINED_SimTrackHitCollectionName"}),
+                        KeyValues("HeaderName", {"UNDEFINED_HeaderName"}),},
+                       {KeyValues("TrackerHitCollectionName", {"UNDEFINED_TrackerHitCollectionName"}),
+                        KeyValues("SimTrkHitRelationsCollection", {"UNDEFINED_SimTrkHitRelationsCollection"})}) {
   info() << "Constructed successfully" << endmsg;
 }
 
@@ -115,9 +115,10 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
     std::tie(hitInfo, hitPos) = GatherHitInfoAndPosition(simHit, headers);
 
     { // debug statements
-      debug() << "   - dep. charge = " << hitInfo.charge() << " e-, path length = " << hitPos.path.r() << " mm, Geant4 path length = " << hitInfo.simPathLength() << " mm" << endmsg;
+      debug() << "   - Processing simHit in event " << hitInfo.eventNumber() << ", layer " << hitInfo.layerIndex() << ", cellID " << hitInfo.cellID() << " (" << std::bitset<24>(hitInfo.cellID()) << ")" << endmsg;
+      verbose() << "   - dep. charge = " << hitInfo.charge() << " e-, path length = " << hitPos.path.r() << " mm, Geant4 path length = " << hitInfo.simPathLength() << " mm" << endmsg;
       verbose() << "   - Position (global) " << hitPos.global.x() << " mm, " << hitPos.global.y() << " mm, " << hitPos.global.z() << " mm" << endmsg;
-      debug() << "   - Position (local) " << hitPos.local.x() << " mm, " << hitPos.local.y() << " mm, " << hitPos.local.z() << " mm (in sensor frame)" << endmsg;
+      verbose() << "   - Position (local) " << hitPos.local.x() << " mm, " << hitPos.local.y() << " mm, " << hitPos.local.z() << " mm (in sensor frame)" << endmsg;
       verbose() << "   - Distance to surface " << hitInfo.simSurface()->distance(dd4hep::mm * hitPos.global) << " mm" << endmsg; // dd4hep expects cm, simHitGlobalPosition is in mm. dd4hep::cm=0.1
       verbose() << "   - Entry point (sensor local) : " << hitPos.entry.x() << " mm, " << hitPos.entry.y() << " mm, " << hitPos.entry.z() << " mm" << endmsg;
     }
@@ -432,65 +433,95 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
   error() << " - You enabled creating debug histograms by setting `DebugHistograms = True`. This is NOT MULTITHREADING SAFE and will cause crashes if multithreading is used." << endmsg;
   verbose () << " - Creating debug histograms ..." << endmsg;
 
-  /* -- 1D Histograms -- */
+  /* -- Global Histograms (collect from all layers) -- */
 
-  m_histograms.at(hist_simHitE).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, 
+  m_histogramsGlobal.at(histGlobal_simHitE).reset(
+    new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this, 
       "simHitE", "SimHit Energy;keV", 
       {1000, 0, m_sensorThickness.at(0)*2000}}); 
-  m_histograms.at(hist_simHitCharge).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this,
+  m_histogramsGlobal.at(histGlobal_simHitCharge).reset(
+    new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this,
       "simHitCharge", "SimHit Raw Charge;dep. charges [e-]",
       {1000, 0, m_sensorThickness.at(0)*500000}});
 
-  m_histograms.at(hist_clusterSize_raw).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "ClusterSize_Raw", "Cluster Size of Raw Charges (ie. number of pixels that receive any charge from this simHit);Cluster size [pix]", {50, -0.5, 49.5}});
-  m_histograms.at(hist_clusterSize_measured).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "ClusterSize_Measured", "Cluster Size of Measured Charges (ie. number of pixels that are above threshold due to the simHit's deposited charge);Cluster size [pix]", {50, -0.5, 49.5}});
+  m_histogramsGlobal.at(histGlobal_clusterSize_raw).reset(
+    new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this, 
+      "ClusterSize_Raw", 
+      "Global Cluster Size of Raw Charges (ie. number of pixels that receive any charge from this simHit);Cluster size [pix]",
+      {50, -0.5, 49.5}
+    }
+  );
 
-  m_histograms.at(hist_pathLength).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "PathLength", "Path Length in Sensor Active Volume;Path length [um]", {500, 0., m_sensorThickness.at(0)*10*1000}}); // in um, max 10x sensor thickness (for very shallow angles)
-  m_histograms.at(hist_pathLengthGeant4).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "PathLength-Geant4", "Path Length in Sensor Active Volume\nAs Given by Geant4;Path length [um]", {500, 0., m_sensorThickness.at(0)*10*1000}}); // in um, max 10x sensor thickness (for very shallow angles)
+  m_histogramsGlobal.at(histGlobal_clusterSize_measured).reset(
+    new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this,
+      "ClusterSize_Measured",
+      "Global Cluster Size of Measured Charges (ie. number of pixels that are above threshold due to the simHit's deposited charge);Cluster size [pix]",
+      {50, -0.5, 49.5}
+    }
+  );
 
-  m_histograms.at(hist_EntryPointX).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "EntryPointX", "SimHit Entry Point U (in local sensor frame);u [mm]", {400, -4, 4}});
-  m_histograms.at(hist_EntryPointY).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "EntryPointY", "SimHit Entry Point V (in local sensor frame);v [mm]", {2000, -20, 20}});
-  m_histograms.at(hist_EntryPointZ).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "EntryPointZ", "SimHit Entry Point W (in local sensor frame);w [mm]", {1000, -300, 300}});
+  m_histogramsGlobal.at(histGlobal_pathLength).reset(
+    new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this, "PathLength", "Path Length in Sensor Active Volume;Path length [um]", {500, 0., m_sensorThickness.at(0)*10*1000}}); // in um, max 10x sensor thickness (for very shallow angles)
+  m_histogramsGlobal.at(histGlobal_pathLengthGeant4).reset(
+    new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this, "PathLength-Geant4", "Path Length in Sensor Active Volume\nAs Given by Geant4;Path length [um]", {500, 0., m_sensorThickness.at(0)*10*1000}}); // in um, max 10x sensor thickness (for very shallow angles)
 
-  m_histograms.at(hist_DisplacementU).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "LocalDisplacementU", "Displacement U (local sensor frame): digiHit_u - simHit_u;dU [um]", {800, -200, 200}});
-  m_histograms.at(hist_DisplacementV).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "LocalDisplacementV", "Displacement V (local sensor frame): digiHit_v - simHit_v;dV [um]", {800, -200, 200}});
-  m_histograms.at(hist_DisplacementR).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "GlobalDisplacementR", "Displacement R (global frame): | digiHit - simHit |;dR [um]", {300, 0., 300}});
+  m_histogramsGlobal.at(histGlobal_EntryPointX).reset(
+    new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this, "EntryPointX", "SimHit Entry Point U (in local sensor frame);u [mm]", {400, -4, 4}});
+  m_histogramsGlobal.at(histGlobal_EntryPointY).reset(
+    new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this, "EntryPointY", "SimHit Entry Point V (in local sensor frame);v [mm]", {2000, -20, 20}});
+  m_histogramsGlobal.at(histGlobal_EntryPointZ).reset(
+    new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this, "EntryPointZ", "SimHit Entry Point W (in local sensor frame);w [mm]", {1000, -300, 300}});
 
-  m_histograms.at(hist_chargeCollectionEfficiency_raw).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "ChargeCollectionEfficiency_rawCharge", "Charge collection efficiency (raw charge, eg. before noise & threshold);# e- (digitised) / # e- (simHit)", {500, 0., 2.}});
+  m_histogramsGlobal.at(histGlobal_DisplacementU).reset(
+    new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this, "LocalDisplacementU", "Displacement U (local sensor frame): digiHit_u - simHit_u;dU [um]", {800, -200, 200}});
+  m_histogramsGlobal.at(histGlobal_DisplacementV).reset(
+    new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this, "LocalDisplacementV", "Displacement V (local sensor frame): digiHit_v - simHit_v;dV [um]", {800, -200, 200}});
+  m_histogramsGlobal.at(histGlobal_DisplacementR).reset(
+    new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this, "GlobalDisplacementR", "Displacement R (global frame): | digiHit - simHit |;dR [um]", {300, 0., 300}});
+
+  m_histogramsGlobal.at(histGlobal_chargeCollectionEfficiency_raw).reset(
+    new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this, "ChargeCollectionEfficiency_rawCharge", "Charge collection efficiency (raw charge, eg. before noise & threshold);# e- (digitised) / # e- (simHit)", {500, 0., 2.}});
   
-  m_histograms.at(hist_chargeCollectionEfficiency).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "ChargeCollectionEfficiency", "Charge collection efficiency;# e- (digitised) / # e- (simHit)", {500, 0., 2.}});
+  m_histogramsGlobal.at(histGlobal_chargeCollectionEfficiency).reset(
+    new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this, "ChargeCollectionEfficiency", "Charge collection efficiency;# e- (digitised) / # e- (simHit)", {500, 0., 2.}});
 
   
 
-  m_histograms.at(hist_pixelChargeMatrix_size_u).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "PixelChargeMatrix_Size_u", "Final Size of the Pixel Charge Matrix in u (local);pixel charge matrix size u [pix]", {100, -0.5, 99.5}});
-  m_histograms.at(hist_pixelChargeMatrix_size_v).reset(
-    new Gaudi::Accumulators::StaticRootHistogram<1>{this, "PixelChargeMatrix_Size_v", "Final Size of the Pixel Charge Matrix in v (local);pixel charge matrix size v [pix]", {100, -0.5, 99.5}});
+  m_histogramsGlobal.at(histGlobal_pixelChargeMatrix_size_u).reset(
+    new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this, "PixelChargeMatrix_Size_u", "Final Size of the Pixel Charge Matrix in u (local);pixel charge matrix size u [pix]", {100, -0.5, 99.5}});
+  m_histogramsGlobal.at(histGlobal_pixelChargeMatrix_size_v).reset(
+    new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this, "PixelChargeMatrix_Size_v", "Final Size of the Pixel Charge Matrix in v (local);pixel charge matrix size v [pix]", {100, -0.5, 99.5}});
 
-  /* -- 2D Histograms -- */
 
+  
+  /* -- Per-layer Histograms -- */
+  
+  m_histograms1d.resize(m_layersToDigitize.size());
   m_histograms2d.resize(m_layersToDigitize.size()); // resize vector to hold all histograms
   m_histWeighted2d.resize(m_layersToDigitize.size());
 
   for (int layer : m_layersToDigitize) {
     int layerIndex = m_layerToIndex.at(layer);
+
+    m_histograms1d.at(layerIndex).at(hist1d_ClusterSize_raw).reset(
+      new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this, 
+        "Layer"+std::to_string(layer)+"_ClusterSize_Raw",
+        "Cluster Size of Raw Charges (ie. number of pixels that receive any charge from this simHit);Cluster size [pix]",
+        {50, -0.5, 49.5}
+      }
+    );
+    m_histograms1d.at(layerIndex).at(hist1d_ClusterSize_measured).reset(
+      new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this, 
+        "Layer"+std::to_string(layer)+"_ClusterSize_Measured",
+        "Cluster Size of Measured Charges (ie. number of pixels that are above threshold due to the simHit's deposited charge);Cluster size [pix]",
+        {50, -0.5, 49.5}
+      }
+    );
+
     verbose () << " - Creating 2D histograms for layer " << layer << " (index " << layerIndex << ")" << endmsg;
 
     m_histograms2d.at(layerIndex).at(hist2d_hitMap_simHits).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
+      new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full>{this, 
         "Layer"+std::to_string(layer)+"_HitMap_simHits",
         "SimHit Hitmap, Layer " + std::to_string(layer) + ";u [pix]; v [pix]",
         {static_cast<unsigned int>(m_pixelCount_u.value().at(0)), -0.5, static_cast<double>(m_pixelCount_u.value().at(0)+0.5)},
@@ -498,7 +529,7 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
       }
     );
     m_histograms2d.at(layerIndex).at(hist2d_hitMap_digiHits).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
+      new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full>{this, 
         "Layer"+std::to_string(layer)+"_HitMap_digiHits",
         "DigiHit Hitmap, Layer " + std::to_string(layer) + ";u [pix]; v [pix]",
         {static_cast<unsigned int>(m_pixelCount_u.value().at(0)), -0.5, static_cast<double>(m_pixelCount_u.value().at(0)+0.5)},
@@ -506,7 +537,7 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
       }
     );
     m_histograms2d.at(layerIndex).at(hist2d_pathLength_vs_simHit_v).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
+      new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full>{this, 
         "Layer"+std::to_string(layer)+"_TrackLength_vs_simHit_v",
         "Track Length in Sensor Active Volume vs. SimHit v position (local), Layer " + std::to_string(layer) + ";SimHit v [pix];Track length [um]",
           {static_cast<unsigned int>(m_pixelCount_v.value().at(0)), -0.5, static_cast<double>(m_pixelCount_v.value().at(0)+0.5)},
@@ -515,7 +546,7 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
       }
     );
     m_histograms2d.at(layerIndex).at(hist2d_pixelChargeMatrixSize).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
+      new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full>{this, 
         "Layer"+std::to_string(layer)+"_PixelChargeMatrixSize",
         "Pixel Charge Matrix Size, Layer " + std::to_string(layer) + ";u [pix];v [pix]",
         {100, -0.5, 99.5},
@@ -523,7 +554,7 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
       }
     );
     m_histograms2d.at(layerIndex).at(hist2d_pathAngleToSensorNormal).reset(
-      new Gaudi::Accumulators::StaticRootHistogram<2>{this, 
+      new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full>{this, 
         "Layer"+std::to_string(layer)+"_PathAngleToSensorNormal",
         "Path Angle to Sensor Normal Vector, Layer " + std::to_string(layer) + ";d_theta [deg];d_phi [deg]",
         {360, -180., 180.},
@@ -880,7 +911,7 @@ void VTXdigi_Allpix2::collectSegmentCharge(HitInfo& hitInfo, PixelChargeMatrix& 
 void VTXdigi_Allpix2::AnalyseSharedCharge(const HitInfo& hitInfo, const HitPosition& hitPos, const PixelChargeMatrix& pixelChargeMatrix, const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks) const {
   /** Process the shared charge in pixelChargeMatrix, create digiHits and fill digiHits and digiHitsLinks collections */
 
-  debug() << "   - Processed all segments. Looping over pixelChargeMatrix." << endmsg;
+  debug() << "       - Processed all segments. Looping over pixelChargeMatrix." << endmsg;
   
   int nPixelsReceivedCharge = 0;
   int nPixelsFired = 0;
@@ -901,7 +932,7 @@ void VTXdigi_Allpix2::AnalyseSharedCharge(const HitInfo& hitInfo, const HitPosit
       float pixelChargeMeasured = pixelChargeRaw + pixelChargeMatrix.GetNoise(i_u, i_v);
 
       if (pixelChargeMeasured < m_pixelThreshold) {
-        verbose() << "     - Pixel (" << i_u << ", " << i_v << ") received a measured/raw charge of " << pixelChargeMeasured << " / " << pixelChargeRaw << " e-. This is below threshold (" << m_pixelThreshold << " e-). Discarding pixel." << endmsg;
+        verbose() << "       - Pixel (" << i_u << ", " << i_v << ") received a measured/raw charge of " << pixelChargeMeasured << " / " << pixelChargeRaw << " e-. This is below threshold (" << m_pixelThreshold << " e-). Discarding pixel." << endmsg;
         continue;
       }
 
@@ -909,7 +940,7 @@ void VTXdigi_Allpix2::AnalyseSharedCharge(const HitInfo& hitInfo, const HitPosit
       dd4hep::rec::Vector3D pixelCenterLocal = computePixelCenter_Local(i_u, i_v, hitInfo.layerIndex(), *hitInfo.simSurface());
       dd4hep::rec::Vector3D pixelCenterGlobal = transformLocalToGlobal(pixelCenterLocal, hitInfo.cellID());
 
-      debug() << "     - Pixel (" << i_u << ", " << i_v << ") at (" << pixelCenterLocal.x() << ", " << pixelCenterLocal.y() << ", " << pixelCenterLocal[2] << ") mm received a measured/raw charge of " << pixelChargeMeasured << "/" << pixelChargeRaw << " e-, center at global position " << pixelCenterGlobal[0] << " mm, " << pixelCenterGlobal[1] << " mm, " << pixelCenterGlobal[2] << " mm" << endmsg;
+      debug() << "       - Pixel (" << i_u << ", " << i_v << ") at (" << pixelCenterLocal.x() << ", " << pixelCenterLocal.y() << ", " << pixelCenterLocal[2] << ") mm received a measured/raw charge of " << pixelChargeMeasured << "/" << pixelChargeRaw << " e-, center at global position " << pixelCenterGlobal[0] << " mm, " << pixelCenterGlobal[1] << " mm, " << pixelCenterGlobal[2] << " mm" << endmsg;
       createDigiHit(simHit, digiHits, digiHitsLinks, pixelCenterGlobal, pixelChargeMeasured);
       ++m_counter_digiHitsCreated;
 
@@ -919,8 +950,11 @@ void VTXdigi_Allpix2::AnalyseSharedCharge(const HitInfo& hitInfo, const HitPosit
   } // end loop over pixels, create digiHits
 
   if (m_debugHistograms) {
-    ++(*m_histograms.at(hist_clusterSize_raw))[static_cast<double>(nPixelsReceivedCharge)]; // cluster size = number of pixels fired per simHit
-    ++(*m_histograms.at(hist_clusterSize_measured))[static_cast<double>(nPixelsFired)];
+    ++(*m_histogramsGlobal.at(histGlobal_clusterSize_raw))[static_cast<double>(nPixelsReceivedCharge)]; // cluster size = number of pixels fired per simHit
+    ++(*m_histogramsGlobal.at(histGlobal_clusterSize_measured))[static_cast<double>(nPixelsFired)];
+    
+    ++(*m_histograms1d.at(hitInfo.layerIndex()).at(hist1d_ClusterSize_raw))[static_cast<double>(nPixelsReceivedCharge)];
+    ++(*m_histograms1d.at(hitInfo.layerIndex()).at(hist1d_ClusterSize_measured))[static_cast<double>(nPixelsFired)];
   }
     
 
@@ -935,15 +969,15 @@ void VTXdigi_Allpix2::AnalyseSharedCharge(const HitInfo& hitInfo, const HitPosit
 
 void VTXdigi_Allpix2::FillGeneralDebugHistograms(HitInfo& hitInfo, const HitPosition& hitPos, const PixelChargeMatrix& pixelChargeMatrix) const {
   verbose() << "   - Filling 1D histograms" << endmsg;
-  ++(*m_histograms.at(hist_simHitCharge))[hitInfo.charge()]; // in e
-  ++(*m_histograms.at(hist_simHitE))[hitInfo.charge() / m_chargePerkeV]; // in keV
-  ++(*m_histograms.at(hist_EntryPointX))[hitPos.entry.x()]; // in mm
-  ++(*m_histograms.at(hist_EntryPointY))[hitPos.entry.y()]; // in mm
-  ++(*m_histograms.at(hist_EntryPointZ))[hitPos.entry.z()*1000]; // convert mm to um
-  ++(*m_histograms.at(hist_pathLength))[hitPos.path.r()*1000]; // convert mm to um
-  ++(*m_histograms.at(hist_pathLengthGeant4))[hitInfo.simPathLength()*1000]; // convert mm to um
-  ++(*m_histograms.at(hist_chargeCollectionEfficiency_raw))[ pixelChargeMatrix.GetTotalRawCharge() / hitInfo.charge() ]; // in e-, only if at least one pixel fired
-  ++(*m_histograms.at(hist_chargeCollectionEfficiency))[ pixelChargeMatrix.GetTotalMeasuredCharge(m_pixelThreshold) / hitInfo.charge()];
+  ++(*m_histogramsGlobal.at(histGlobal_simHitCharge))[hitInfo.charge()]; // in e
+  ++(*m_histogramsGlobal.at(histGlobal_simHitE))[hitInfo.charge() / m_chargePerkeV]; // in keV
+  ++(*m_histogramsGlobal.at(histGlobal_EntryPointX))[hitPos.entry.x()]; // in mm
+  ++(*m_histogramsGlobal.at(histGlobal_EntryPointY))[hitPos.entry.y()]; // in mm
+  ++(*m_histogramsGlobal.at(histGlobal_EntryPointZ))[hitPos.entry.z()*1000]; // convert mm to um
+  ++(*m_histogramsGlobal.at(histGlobal_pathLength))[hitPos.path.r()*1000]; // convert mm to um
+  ++(*m_histogramsGlobal.at(histGlobal_pathLengthGeant4))[hitInfo.simPathLength()*1000]; // convert mm to um
+  ++(*m_histogramsGlobal.at(histGlobal_chargeCollectionEfficiency_raw))[ pixelChargeMatrix.GetTotalRawCharge() / hitInfo.charge() ]; // in e-, only if at least one pixel fired
+  ++(*m_histogramsGlobal.at(histGlobal_chargeCollectionEfficiency))[ pixelChargeMatrix.GetTotalMeasuredCharge(m_pixelThreshold) / hitInfo.charge()];
   
   int pix_u, pix_v;
   std::tie(pix_u, pix_v) = computePixelIndices(hitPos.local, hitInfo.layerIndex(), hitInfo.length(0), hitInfo.length(1));
@@ -951,8 +985,8 @@ void VTXdigi_Allpix2::FillGeneralDebugHistograms(HitInfo& hitInfo, const HitPosi
   ++(*m_histograms2d.at(hitInfo.layerIndex()).at(hist2d_hitMap_simHits))[{pix_u, pix_v}]; // in mm
   ++(*m_histograms2d.at(hitInfo.layerIndex()).at(hist2d_pathLength_vs_simHit_v))[{pix_v, hitPos.path.r()*1000}]; // in um and mm
 
-  ++(*m_histograms.at(hist_pixelChargeMatrix_size_u))[pixelChargeMatrix.GetSize_u()];
-  ++(*m_histograms.at(hist_pixelChargeMatrix_size_v))[pixelChargeMatrix.GetSize_v()];
+  ++(*m_histogramsGlobal.at(histGlobal_pixelChargeMatrix_size_u))[pixelChargeMatrix.GetSize_u()];
+  ++(*m_histogramsGlobal.at(histGlobal_pixelChargeMatrix_size_v))[pixelChargeMatrix.GetSize_v()];
   
   ++(*m_histograms2d.at(hitInfo.layerIndex()).at(hist2d_pixelChargeMatrixSize))[{pixelChargeMatrix.GetSize_u(), pixelChargeMatrix.GetSize_v()}];
 
@@ -980,9 +1014,9 @@ void VTXdigi_Allpix2::fillDebugHistograms_targetPixelLoop(const HitInfo& hitInfo
   dd4hep::rec::Vector3D pixelCenterLocal = computePixelCenter_Local(i_u, i_v, hitInfo.layerIndex(), *hitInfo.simSurface());
   dd4hep::rec::Vector3D pixelCenterGlobal = transformLocalToGlobal(pixelCenterLocal, hitInfo.cellID());
   
-  ++ (*m_histograms.at(hist_DisplacementU))[ (pixelCenterLocal.x() - hitPos.local.x()) * 1000]; // convert mm to um
-  ++ (*m_histograms.at(hist_DisplacementV))[ (pixelCenterLocal.y() - hitPos.local.y()) * 1000]; // convert mm to um
-  ++ (*m_histograms.at(hist_DisplacementR))[sqrt( (pixelCenterGlobal.x() - hitPos.global.x())*(pixelCenterGlobal.x() - hitPos.global.x()) + (pixelCenterGlobal.y() - hitPos.global.y())*(pixelCenterGlobal.y() - hitPos.global.y()) + (pixelCenterGlobal.z() - hitPos.global.z())*(pixelCenterGlobal.z() - hitPos.global.z()) ) * 1000]; // convert mm to um
+  ++ (*m_histogramsGlobal.at(histGlobal_DisplacementU))[ (pixelCenterLocal.x() - hitPos.local.x()) * 1000]; // convert mm to um
+  ++ (*m_histogramsGlobal.at(histGlobal_DisplacementV))[ (pixelCenterLocal.y() - hitPos.local.y()) * 1000]; // convert mm to um
+  ++ (*m_histogramsGlobal.at(histGlobal_DisplacementR))[sqrt( (pixelCenterGlobal.x() - hitPos.global.x())*(pixelCenterGlobal.x() - hitPos.global.x()) + (pixelCenterGlobal.y() - hitPos.global.y())*(pixelCenterGlobal.y() - hitPos.global.y()) + (pixelCenterGlobal.z() - hitPos.global.z())*(pixelCenterGlobal.z() - hitPos.global.z()) ) * 1000]; // convert mm to um
 
 }
 
@@ -1226,6 +1260,7 @@ void VTXdigi_Allpix2::createDigiHit(const edm4hep::SimTrackerHit& simHit, edm4he
 
   auto digiHit = digiHits.create();
   digiHit.setCellID(simHit.getCellID());
+  warning() << "         - Creating digiHit in cellID " << simHit.getCellID() << " (" << std::bitset<24>(simHit.getCellID()) << "), setting eDep to " << charge/m_chargePerkeV << " keV" << endmsg;
   digiHit.setEDep(charge / m_chargePerkeV); // convert e- to keV
   digiHit.setPosition(convertVector(position));
   // TODO: check if position is within sensor bounds & force it onto sensor simSurface ~ Jona 2025-09

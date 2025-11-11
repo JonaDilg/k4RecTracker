@@ -293,24 +293,48 @@ private:
   mutable std::ofstream m_debugCsvFile; // debug output file. Definitely not thread-safe.
 
   enum { 
-    hist_simHitE, 
-    hist_simHitCharge,
-    hist_clusterSize_raw, 
-    hist_clusterSize_measured,
-    hist_EntryPointX, 
-    hist_EntryPointY, 
-    hist_EntryPointZ, 
-    hist_DisplacementU, 
-    hist_DisplacementV, 
-    hist_DisplacementR, 
-    hist_pathLength, 
-    hist_pathLengthGeant4,
-    hist_chargeCollectionEfficiency_raw, 
-    hist_chargeCollectionEfficiency,
-    hist_pixelChargeMatrix_size_u,
-    hist_pixelChargeMatrix_size_v,
-    histArrayLen}; // histogram indices. histArrayLen must be last
-  std::array<std::unique_ptr<Gaudi::Accumulators::StaticRootHistogram<1>>, histArrayLen> m_histograms; 
+    histGlobal_simHitE, 
+    histGlobal_simHitCharge,
+    histGlobal_clusterSize_raw, 
+    histGlobal_clusterSize_measured,
+    histGlobal_EntryPointX, 
+    histGlobal_EntryPointY, 
+    histGlobal_EntryPointZ, 
+    histGlobal_DisplacementU, 
+    histGlobal_DisplacementV, 
+    histGlobal_DisplacementR, 
+    histGlobal_pathLength, 
+    histGlobal_pathLengthGeant4,
+    histGlobal_chargeCollectionEfficiency_raw, 
+    histGlobal_chargeCollectionEfficiency,
+    histGlobal_pixelChargeMatrix_size_u,
+    histGlobal_pixelChargeMatrix_size_v,
+    histArrayLen}; // Global histogram indices (these hists collect from all layers). histArrayLen must be last
+  std::array<
+    std::unique_ptr<
+      Gaudi::Accumulators::StaticHistogram<
+        1,
+        Gaudi::Accumulators::atomicity::full
+      >
+    >, 
+    histArrayLen
+  > m_histogramsGlobal; 
+
+  enum {
+    hist1d_ClusterSize_raw,
+    hist1d_ClusterSize_measured,
+    hist1dArrayLen
+  }; // all other hists have an individual instance per layer
+  std::vector<
+    std::array<
+      std::unique_ptr<
+        Gaudi::Accumulators::StaticHistogram<
+          1, 
+          Gaudi::Accumulators::atomicity::full>
+      >,
+      hist1dArrayLen
+    >
+  > m_histograms1d;
 
   enum { 
     hist2d_hitMap_simHits,
@@ -318,15 +342,36 @@ private:
     hist2d_pathLength_vs_simHit_v,
     hist2d_pixelChargeMatrixSize,
     hist2d_pathAngleToSensorNormal,
-    hist2dArrayLen }; // 2D histogram indices. hist2dArrayLen must be last
-  std::vector<std::array<std::unique_ptr<Gaudi::Accumulators::StaticRootHistogram<2>>, hist2dArrayLen>> m_histograms2d;
+    hist2dArrayLen };
+  std::vector<
+    std::array<
+      std::unique_ptr<
+        Gaudi::Accumulators::StaticHistogram<
+          2,
+          Gaudi::Accumulators::atomicity::full
+        >
+      >,
+      hist2dArrayLen
+    >
+  > m_histograms2d;
 
   enum {
     histWeighted2d_averageCluster,
     histWeighted2d_chargeOriginU,
     histWeighted2d_chargeOriginV,
     histWeighted2dArrayLen };
-  std::vector<std::array<std::unique_ptr<Gaudi::Accumulators::StaticWeightedHistogram<2, Gaudi::Accumulators::atomicity::full, double>>, histWeighted2dArrayLen>> m_histWeighted2d;
+  std::vector<
+    std::array<
+      std::unique_ptr<
+        Gaudi::Accumulators::StaticWeightedHistogram<
+          2, 
+          Gaudi::Accumulators::atomicity::full,
+          double
+        >
+      >,
+      histWeighted2dArrayLen
+    >
+  > m_histWeighted2d;
 
   /* TODO: implement having a set of kernels per layer (array of unique_ptr ?) */
 };
