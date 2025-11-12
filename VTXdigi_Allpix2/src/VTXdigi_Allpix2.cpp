@@ -116,7 +116,7 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
 
     { // debug statements
       debug() << "   - Processing simHit in event " << hitInfo.eventNumber() << ", layer " << hitInfo.layerIndex() << ", cellID " << hitInfo.cellID() << " (" << std::bitset<24>(hitInfo.cellID()) << ")" << endmsg;
-      verbose() << "   - dep. charge = " << hitInfo.charge() << " e-, path length = " << hitPos.path.r() << " mm, Geant4 path length = " << hitInfo.simPathLength() << " mm" << endmsg;
+      debug() << "   - Momentum = " << hitInfo.simMomentum() << " GeV/c, dep. charge = " << hitInfo.charge() << " e-, path length = " << hitPos.path.r() << " mm, Geant4 path length = " << hitInfo.simPathLength() << " mm" << endmsg;
       verbose() << "   - Position (global) " << hitPos.global.x() << " mm, " << hitPos.global.y() << " mm, " << hitPos.global.z() << " mm" << endmsg;
       verbose() << "   - Position (local) " << hitPos.local.x() << " mm, " << hitPos.local.y() << " mm, " << hitPos.local.z() << " mm (in sensor frame)" << endmsg;
       verbose() << "   - Distance to surface " << hitInfo.simSurface()->distance(dd4hep::mm * hitPos.global) << " mm" << endmsg; // dd4hep expects cm, simHitGlobalPosition is in mm. dd4hep::cm=0.1
@@ -518,6 +518,29 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
       }
     );
 
+    m_histograms1d.at(layerIndex).at(hist1d_IncidentAngle_ThetaLocal).reset(
+      new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this, 
+        "Layer"+std::to_string(layer)+"_IncidentAngle_LocalTheta",
+        "Local theta: particle momentum incident angle to sensor normal;Polar angle [deg]",
+        {360, -180., 180.}
+      }
+    );
+    m_histograms1d.at(layerIndex).at(hist1d_IncidentAngle_PhiLocal).reset(
+      new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this, 
+        "Layer"+std::to_string(layer)+"_IncidentAngle_LocalPhi",
+        "Local phi: particle momentum incident angle to sensor normal;Azimuthal angle [deg]",
+        {360, -180., 180.}
+      }
+    );
+
+    m_histograms1d.at(layerIndex).at(hist1d_SimHitMomentum).reset(
+      new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full>{this, 
+        "Layer"+std::to_string(layer)+"_simHitMomentum",
+        "SimHit Momentum;Momentum [MeV/c]",
+        {10000, 0., 5000.}
+      }
+    );
+
     verbose () << " - Creating 2D histograms for layer " << layer << " (index " << layerIndex << ")" << endmsg;
 
     m_histograms2d.at(layerIndex).at(hist2d_hitMap_simHits).reset(
@@ -553,10 +576,10 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
         {100, -0.5, 99.5}
       }
     );
-    m_histograms2d.at(layerIndex).at(hist2d_pathAngleToSensorNormal).reset(
+    m_histograms2d.at(layerIndex).at(hist2d_IncidentAngle).reset(
       new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full>{this, 
-        "Layer"+std::to_string(layer)+"_PathAngleToSensorNormal",
-        "Path Angle to Sensor Normal Vector, Layer " + std::to_string(layer) + ";d_theta [deg];d_phi [deg]",
+        "Layer"+std::to_string(layer)+"_IncidentAngle_2D",
+        "Incident particle angle to sensor normal, Layer " + std::to_string(layer) + ";Local theta [deg];Local phi [deg]",
         {360, -180., 180.},
         {360, -180., 180.}
       }
@@ -847,9 +870,9 @@ VTXdigi_Allpix2::PixelChargeMatrix VTXdigi_Allpix2::DepositAndCollectCharge(HitI
   SegmentIndices nextSegment;
 
   /* loop over segments */
-  for (int segmentIndex = 1; segmentIndex < hitInfo.nSegments(); ++segmentIndex) {
+  for (int nextSegmentIndex = 1; nextSegmentIndex < hitInfo.nSegments(); ++nextSegmentIndex) {
 
-    nextSegment = computeSegmentIndices(hitInfo, hitPos.entry, hitPos.path, segmentIndex);
+    nextSegment = computeSegmentIndices(hitInfo, hitPos.entry, hitPos.path, nextSegmentIndex);
 
     if (segment == nextSegment) {
       verbose() << "       - Segment lies in the same pixel and in-pixel bin as previous segment, continuing." << endmsg;
@@ -857,8 +880,8 @@ VTXdigi_Allpix2::PixelChargeMatrix VTXdigi_Allpix2::DepositAndCollectCharge(HitI
       continue;
     } 
     else {
-      verbose() << "       - Crossed bin-boundary. Sharing " << segmentCharge*segmentsInBin << " e- from " << segmentsInBin << " segments. The last segment of these has segmentIndex " << segmentIndex << "." << endmsg;
-      collectSegmentCharge(hitInfo, pixelChargeMatrix, segment, segmentCharge); // write charge for this set of segments into pixelChargeMatrix (done like this to avoid copying the matrix in memory every time we write into it)
+      verbose() << "       - Crossed bin-boundary wrt. last segment. Sharing " << segmentCharge*segmentsInBin << " e- from " << segmentsInBin << " segments. The last segment of these has nextSegmentIndex " << nextSegmentIndex-1 << "." << endmsg;
+      collectSegmentCharge(hitInfo, pixelChargeMatrix, segment, segmentCharge); // write charge for this set of segments into pixelChargeMatrix (avoids copying the matrix in memory every time we write into it)
 
       segment = nextSegment;
       segmentsInBin = 1;
@@ -968,6 +991,7 @@ void VTXdigi_Allpix2::AnalyseSharedCharge(const HitInfo& hitInfo, const HitPosit
 } // AnalyseSharedCharge()
 
 void VTXdigi_Allpix2::FillGeneralDebugHistograms(HitInfo& hitInfo, const HitPosition& hitPos, const PixelChargeMatrix& pixelChargeMatrix) const {
+  /* mostly implements per-simhit histograms */
   verbose() << "   - Filling 1D histograms" << endmsg;
   ++(*m_histogramsGlobal.at(histGlobal_simHitCharge))[hitInfo.charge()]; // in e
   ++(*m_histogramsGlobal.at(histGlobal_simHitE))[hitInfo.charge() / m_chargePerkeV]; // in keV
@@ -979,6 +1003,8 @@ void VTXdigi_Allpix2::FillGeneralDebugHistograms(HitInfo& hitInfo, const HitPosi
   ++(*m_histogramsGlobal.at(histGlobal_chargeCollectionEfficiency_raw))[ pixelChargeMatrix.GetTotalRawCharge() / hitInfo.charge() ]; // in e-, only if at least one pixel fired
   ++(*m_histogramsGlobal.at(histGlobal_chargeCollectionEfficiency))[ pixelChargeMatrix.GetTotalMeasuredCharge(m_pixelThreshold) / hitInfo.charge()];
   
+  ++(*m_histograms1d.at(hitInfo.layerIndex()).at(hist1d_SimHitMomentum))[hitInfo.simMomentum()*1000]; // Convert GeV to MeV
+
   int pix_u, pix_v;
   std::tie(pix_u, pix_v) = computePixelIndices(hitPos.local, hitInfo.layerIndex(), hitInfo.length(0), hitInfo.length(1));
   verbose() << "   - Filling 2D histograms for layer " << m_cellIDdecoder->get(hitInfo.cellID(), "layer") << " (index " << hitInfo.layerIndex() << ")" << endmsg;
@@ -992,7 +1018,9 @@ void VTXdigi_Allpix2::FillGeneralDebugHistograms(HitInfo& hitInfo, const HitPosi
 
   float pathAnglePhi = atan2(hitPos.path.x(), hitPos.path.z()) / 3.14159265 * 180.f; // in degrees
   float pathAngleTheta = atan2(hitPos.path.y(), hitPos.path.z()) / 3.14159265 * 180.f; // in degrees
-  ++(*m_histograms2d.at(hitInfo.layerIndex()).at(hist2d_pathAngleToSensorNormal))[{pathAngleTheta, pathAnglePhi}];
+  ++(*m_histograms1d.at(hitInfo.layerIndex()).at(hist1d_IncidentAngle_ThetaLocal))[pathAngleTheta];
+  ++(*m_histograms1d.at(hitInfo.layerIndex()).at(hist1d_IncidentAngle_PhiLocal))[pathAnglePhi];
+  ++(*m_histograms2d.at(hitInfo.layerIndex()).at(hist2d_IncidentAngle))[{pathAngleTheta, pathAnglePhi}];
 }
 
 void VTXdigi_Allpix2::fillDebugHistograms_segmentLoop(const HitInfo& hitInfo, const SegmentIndices& segment, int i_m, int i_n, const float sharedCharge) const {
@@ -1034,8 +1062,8 @@ int VTXdigi_Allpix2::computeBinIndex(float x, float binX0, float binWidth, int b
   if (binN <= 0) throw GaudiException("computeBinIndex: binN must be positive", "VTXdigi_Allpix2::computeBinIndex()", StatusCode::FAILURE);
   if (binWidth <= 0.0) throw GaudiException("computeBinIndex: binWidth must be positive", "VTXdigi_Allpix2::computeBinIndex()", StatusCode::FAILURE);
 
-  float relativePos = (x - binX0) / binWidth;
-  if (relativePos < 0.0f || relativePos > static_cast<float>(binN))
+  float relativePos = (x - binX0) / binWidth; // shift to [0, binN]
+  if (relativePos < 0.0f || relativePos >= static_cast<float>(binN))
     return -1;
   return static_cast<int>(relativePos);
 } // computeBinIndex()
@@ -1059,8 +1087,9 @@ std::tuple<int, int> VTXdigi_Allpix2::computePixelIndices(const dd4hep::rec::Vec
 std::tuple<int, int, int> VTXdigi_Allpix2::computeInPixelIndices(const dd4hep::rec::Vector3D& segmentPos, const int layerIndex, const float length_u, const float length_v) const {
   int j_u, j_v, j_w;
 
-  // compute in-pixel position
-  float shiftedPos_u = segmentPos.x() + 0.5 * length_u; // expected in [0, length_u]
+  verbose() << "         - Computing in-pixel indices. Number of in-pix bins: (" << m_inPixelBinCount[0] << ", " << m_inPixelBinCount[1] << ", " << m_inPixelBinCount[2] << ")" << endmsg;
+
+  float shiftedPos_u = segmentPos.x() + 0.5 * length_u; // shift to [0, length_u]
   float pitch_u = m_pixelPitch_u.at(layerIndex);
   float inPixelPos_u = std::fmod(shiftedPos_u, pitch_u);
   if (inPixelPos_u < 0.0) inPixelPos_u += pitch_u; // ensure positive remainder
@@ -1260,7 +1289,7 @@ void VTXdigi_Allpix2::createDigiHit(const edm4hep::SimTrackerHit& simHit, edm4he
 
   auto digiHit = digiHits.create();
   digiHit.setCellID(simHit.getCellID());
-  warning() << "         - Creating digiHit in cellID " << simHit.getCellID() << " (" << std::bitset<24>(simHit.getCellID()) << "), setting eDep to " << charge/m_chargePerkeV << " keV" << endmsg;
+  verbose() << "         - Creating digiHit in cellID " << simHit.getCellID() << " (" << std::bitset<24>(simHit.getCellID()) << "), setting eDep to " << charge/m_chargePerkeV << " keV" << endmsg;
   digiHit.setEDep(charge / m_chargePerkeV); // convert e- to keV
   digiHit.setPosition(convertVector(position));
   // TODO: check if position is within sensor bounds & force it onto sensor simSurface ~ Jona 2025-09

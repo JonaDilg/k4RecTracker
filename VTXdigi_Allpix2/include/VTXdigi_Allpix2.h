@@ -323,6 +323,9 @@ private:
   enum {
     hist1d_ClusterSize_raw,
     hist1d_ClusterSize_measured,
+    hist1d_IncidentAngle_ThetaLocal,
+    hist1d_IncidentAngle_PhiLocal,
+    hist1d_SimHitMomentum,
     hist1dArrayLen
   }; // all other hists have an individual instance per layer
   std::vector<
@@ -341,7 +344,7 @@ private:
     hist2d_hitMap_digiHits, 
     hist2d_pathLength_vs_simHit_v,
     hist2d_pixelChargeMatrixSize,
-    hist2d_pathAngleToSensorNormal,
+    hist2d_IncidentAngle,
     hist2dArrayLen };
   std::vector<
     std::array<
@@ -386,6 +389,7 @@ class VTXdigi_Allpix2::HitInfo {
   int m_layerIndex;
   float m_charge;
   float m_simPathLength;
+  float m_simMomentum; // magnitude of simHit momentum in GeV/c at the position of the sensor
 
   float m_length[2]; // sensor length in u and v direction [mm]
   float m_thickness; // sensor thickness [mm]
@@ -415,6 +419,9 @@ class VTXdigi_Allpix2::HitInfo {
 
       m_charge = simHit.getEDep() * (dd4hep::GeV / dd4hep::keV) * vtxdigi_AP2.m_chargePerkeV; // in electrons
       m_simPathLength = simHit.getPathLength(); // in mm
+
+      const edm4hep::Vector3f p = simHit.getMomentum();
+      m_simMomentum = sqrt(p.x*p.x + p.y*p.y + p.z*p.z); // in GeV/c
 
       // sensor dimensions in local frame, in mm
       m_length[0] = m_simSurface->length_along_u() * 10; // convert to mm
@@ -449,6 +456,7 @@ class VTXdigi_Allpix2::HitInfo {
     inline int layerIndex() const { return m_layerIndex; }
     inline float charge() const { return m_charge; }
     inline float simPathLength() const { return m_simPathLength; }
+    inline float simMomentum() const { return m_simMomentum; }
 
     inline float length(int axis) const { return m_length[axis]; } // axis: 0 = u, 1 = v
     inline float thickness() const { return m_thickness; }
