@@ -5,6 +5,7 @@ DECLARE_COMPONENT(Clustering_Pixels)
 Clustering_Pixels::Clustering_Pixels(const std::string& name, ISvcLocator* svcLoc)
     : MultiTransformer(name, svcLoc,
                        {KeyValues("TrackerHitCollectionName", {"UNDEFINED_TrackerHitCollectionName"}),
+                        KeyValues("TrackerHitSimTrackerHitLinkCollectionName", {"UNDEFINED_TrackerHitSimTrackerHitLinkCollectionName"}),
                         KeyValues("HeaderName", {"UNDEFINED_HeaderName"}),},
                        {KeyValues("TrackerClusterHitCollectionName", {"UNDEFINED_TrackerClusterHitCollectionName"}),
                         KeyValues("SimTrkHitRelationsCollection", {"UNDEFINED_SimTrkHitRelationsCollection"})}) {
@@ -35,14 +36,14 @@ StatusCode Clustering_Pixels::finalize() {
 /* -- event loop -- */
 
 std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> Clustering_Pixels::operator()
-  (const edm4hep::TrackerHitPlaneCollection& hits, const edm4hep::EventHeaderCollection& headers) const {
+  (const edm4hep::TrackerHitPlaneCollection& hits, const edm4hep::TrackerHitSimTrackerHitLinkCollection& hitLinks, const edm4hep::EventHeaderCollection& headers) const {
 
   /* Initial check: returns false if event has no simHits, throws if there is a problem with the setup */
   if (!CheckInitialSetup(hits, headers))
     return std::make_tuple(edm4hep::TrackerHitPlaneCollection(), edm4hep::TrackerHitSimTrackerHitLinkCollection());
 
   /* output collections */
-  auto clusters = edm4hep::TrackerHitPlaneCollection();
+  auto clusterHits = edm4hep::TrackerHitPlaneCollection();
   auto clusterHitLinks = edm4hep::TrackerHitSimTrackerHitLinkCollection();
 
   /* sort hits to their respective sensor
@@ -72,60 +73,80 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
     hitsSensorMap[sensorUid].push_back(hitPtr);
   }
 
-
-
-  
   /* Check if we have any hits that are on layers we want to cluster */
   if (hitsSensorMap.empty()) {
     debug() << " - No hits passed the cuts, returning empty output collections." << endmsg;
     ++m_counter_eventsRejected_noHitsOnSpecifiedLayers;
-    return std::make_tuple(std::move(clusters), std::move(clusterHitLinks));
+    return std::make_tuple(std::move(clusterHits), std::move(clusterHitLinks));
   }
   verbose() << " - Sorted " << hits.size() << " hits to " << hitsSensorMap.size() << " sensors. Looping over sensors:" << endmsg;
 
 
   
   /* loop over sensors, create clusters */
-  for (auto& [sensorUid, hitsOnSensor] : hitsSensorMap) {
+  for (auto& [sensorUid, SensorHits] : hitsSensorMap) {
 
-    if (hitsOnSensor.empty())
-      throw GaudiException("Internal error: hitsOnSensor is empty in Clustering_Pixels::operator()", "Clustering_Pixels::operator()", StatusCode::FAILURE);
-    if (hitsOnSensor.front() == nullptr)
+    if (SensorHits.empty())
+      throw GaudiException("Internal error: SensorHits is empty in Clustering_Pixels::operator()", "Clustering_Pixels::operator()", StatusCode::FAILURE);
+    if (SensorHits.front() == nullptr)
       throw GaudiException("Internal error: first hit pointer is null in Clustering_Pixels::operator()", "Clustering_Pixels::operator()", StatusCode::FAILURE);
 
-    int nHits = hitsOnSensor.size();
-    const int layer = m_cellIDdecoder->get(hitsOnSensor.front()->getCellID(), "layer");
-    const int cellID = hitsOnSensor.front()->getCellID();
+    int nHits = SensorHits.size();
+    const int layer = m_cellIDdecoder->get(SensorHits.front()->getCellID(), "layer");
+    const dd4hep::DDSegmentation::CellID cellID = SensorHits.front()->getCellID();
 
     verbose() << "   - Processing hits on (SensorUID " << sensorUid << ", layer " << layer << ", cellID " << cellID << "): found " << nHits << " hits." << endmsg;
 
     /* sort pixels by energy deposition (last element has highest charge) */
     std::sort(
-      hitsOnSensor.begin(), hitsOnSensor.end(),
+      SensorHits.begin(), SensorHits.end(),
       [](const std::shared_ptr<const edm4hep::TrackerHitPlane>& a, const std::shared_ptr<const edm4hep::TrackerHitPlane>& b) {
         return a->getEDep() < b->getEDep();
       });
 
-    /* TODO: set up conversion from global coordinates to pixel indices (i_u, i_v) for this sensor */
+    /* TODO: set up conversion from global coordinates to pixel indices (i_u, i_v) for this sensor 
+    * This would require knowing the pixel pitch and sensor size. the pitch is not directly accessible as of now.
+    * (for now, i simply use the local position )*/
 
-    /* TODO: create data structure that has (i_u, i_v, energy, timestamp, ptr to hit) for each hit */
+    /* place all accepted hits into struct, compute their local coordinates */
+    struct HitData {
+      float u = 0, v = 0;
+      float eDep = 0;
+      float time = 0;
+      std::shared_ptr<const edm4hep::TrackerHitPlane> hitPtr = nullptr;
+    };
+    
+    std::vector<HitData> SensorHitsData;
+    SensorHitsData.reserve(nHits);
 
-    std::vector<std::shared_ptr<const edm4hep::TrackerHitPlane>> hitsInCluster; 
-    hitsInCluster.reserve(9); // reserve space for 3x3 cluster
+    for (const auto& hit : SensorHits) {
+      HitData data;
+      dd4hep::rec::Vector3D globalPos = ConvertVector(hit->getPosition());
+      dd4hep::rec::Vector3D localPos = TransformGlobalToLocal(globalPos, hit->getCellID());
+      data.u = localPos.x();
+      data.v = localPos.y();
+      data.eDep = hit->getEDep();
+      data.time = hit->getTime();
+      data.hitPtr = hit;
+      SensorHitsData.push_back(data);
+    }
+
+    std::vector<HitData> clusterHitsData;
+    clusterHitsData.reserve(9); // reserve space for 3x3 cluster
     int nClusters = 0;
 
     /* clustering algorithm
      * this follows the structure of the Corryvreckan module ClusteringSpatial 
      * (see https://gitlab.cern.ch/corryvreckan/corryvreckan/-/tree/master/src/modules/ClusteringSpatial?ref_type=heads) */
-    while (!hitsOnSensor.empty()) {
+    while (!SensorHitsData.empty()) {
       
       /* TODO: implement charge-threshold and time-cut */
-      
-      verbose() << "      - Starting new cluster with " << hitsOnSensor.size() << " unclustered hits remaining." << endmsg;
+
+      verbose() << "      - Starting new cluster with " << SensorHitsData.size() << " unclustered hits remaining." << endmsg;
       ++nClusters;
-      hitsInCluster.clear();
-      hitsInCluster.push_back(hitsOnSensor.back()); // modifying the last object in vector is much faster than modifying the first
-      hitsOnSensor.pop_back();
+      clusterHitsData.clear();
+      clusterHitsData.push_back(SensorHitsData.back()); // modifying the last object in vector is much faster than modifying the first
+      SensorHitsData.pop_back();
 
       /* look for neighbors, add them, look for neighbors of newly added neighbors, ...
        * until no new neighbors are found */
@@ -133,21 +154,72 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
       while (addedNeighbor) {
         addedNeighbor = false;
 
-        /* TODO: get position in terms of pixels (or in terms of u,v position?)*/
+        /* loop over hits and see if any are closer than r_u^2+r_v^2
+         * this is a brute-force algorithm. From my naive understanding, our low occupancy makes this a non-issue. ~ Jona, 2025-11*/
+        for (auto iterator = SensorHitsData.begin(); iterator != SensorHitsData.end(); ) {
+          const float du = iterator->u - clusterHitsData.back().u; // local u coordinate of last added hit
+          const float dv = iterator->v - clusterHitsData.back().v; // local v coordinate of last added hit
 
-        /* TODO: find neighboring hits and add them to hitsInCluster */
+          /* use ellipse equation (du/r_u)^2 + (dv/r_v)^2 <= 1 to check if hit is within neighbor radius in u and v*/
+          if ((du*du*m_neighborRadiusHelper[1] + dv*dv*m_neighborRadiusHelper[0]) <= m_neighborRadiusHelper[2]) {
+            verbose() << "         - Found neighbor hit at distance (du, dv) = (" << du << " mm, " << dv << " mm), adding to cluster." << endmsg;
+            clusterHitsData.push_back(*iterator);
+            iterator = SensorHitsData.erase(iterator); // erase returns the next iterator
+            addedNeighbor = true;
+          }
+          else {
+            ++iterator;
+            verbose() << "         - Hit at distance (du, dv) = (" << du << " mm, " << dv << " mm) is too far away." << endmsg;
+          }
+        }
       }
 
-      /* TODO: get cluster position and timestamp from hitsInCluster */
+      /* get cluster position and timestamp from clusterHitsData */
 
-      /* TODO: create hit & links for the cluster */
+      float clusterPos_u = 0, clusterPos_v = 0, clusterEDep = 0, clusterTime = 0;
+      for (const auto& hitData : clusterHitsData) {
+        clusterPos_u += hitData.u * hitData.eDep;
+        clusterPos_v += hitData.v * hitData.eDep;
+        clusterEDep += hitData.eDep;
+        /* TODO: weighed average is a crude estimate for cluster timestamp. Think of something better. */
+        clusterTime += hitData.time * hitData.eDep; 
+      }
+      clusterPos_u /= clusterEDep;
+      clusterPos_v /= clusterEDep;
+      clusterTime /= clusterEDep;
+
+      /* create cluster hit */
+
+      auto clusterHit = clusterHits.create();
+      clusterHit.setCellID(cellID);
+      dd4hep::rec::Vector3D clusterLocalPos(clusterPos_u, clusterPos_v, 0.f);
+      dd4hep::rec::Vector3D clusterGlobalPos = TransformLocalToGlobal(clusterLocalPos, cellID);
+      clusterHit.setPosition(ConvertVector(clusterGlobalPos));
+      clusterHit.setEDep(clusterEDep);
+      clusterHit.setTime(clusterTime);
+
+
+
+      /* get pointers to all simHits that are linked to by digiHits in the cluster */
+
+      /* TODO: loop over hits in this cluster, find all linked simHits */
+
+
+      // auto clusterHitLink = clusterHitLinks.create();
+      // clusterHitLink.setFrom(clusterHit);
+
+
+      
+      // for (const auto& hitData : clusterHitsData) {
+      //   clusterHitLink.setTo(hitData.hitPtr);
+      // }
     }
 
     verbose() << "   - Created " << nClusters << " clusters." << endmsg;
   }
 
   debug() << "FINISHED event." << endmsg;
-  return std::make_tuple(std::move(clusters), std::move(clusterHitLinks));
+  return std::make_tuple(std::move(clusterHits), std::move(clusterHitLinks));
 } // operator()
 
 
@@ -205,6 +277,12 @@ void Clustering_Pixels::CheckGaudiProperties() {
     m_layerN = m_layersToRun.size();
     verbose() << " - Digitizing " << m_layerN << " layers, as specified by LayersToRun property." << endmsg;
   }
+
+  /* pre-compute helper for checking if a hit is within the neighbor radius, using the ellipse equation (du/r_u)^2 + (dv/r_v)^2 <= 1:
+   * is neighbor if: du^2*[1] + dv^2*[0]) <= [2] */
+  m_neighborRadiusHelper[0] = m_neighborRadius_u.value()*m_neighborRadius_u.value() / 1e6; // convert from um to mm and square
+  m_neighborRadiusHelper[1] = m_neighborRadius_v.value()*m_neighborRadius_v.value() / 1e6;
+  m_neighborRadiusHelper[2] = m_neighborRadiusHelper[0] * m_neighborRadiusHelper[1] + 0.001f; // add small numeric limit to avoid floating point issues. We can simply add a small epsilon, because we know the order of magnitude of the distances we are working with.
 }
 
 void Clustering_Pixels::SetupDebugHistograms() {
@@ -343,6 +421,22 @@ int Clustering_Pixels::ComputeBinIndex(float x, float binX0, float binWidth, int
     return -1;
   return static_cast<int>(relativePos);
 } // computeBinIndex()
+
+// std::tuple<int, int> VTXdigi_Allpix2::computePixelIndices(const edm4hep::TrackerHitPlane& hit) const {
+  
+//   int i_u = computeBinIndex(
+//     segmentPos.x(),
+//     -0.5*length_u,
+//     m_pixelPitch_u.at(layerIndex),
+//     m_pixelCount_u.value().at(layerIndex));
+
+//   int i_v = computeBinIndex(
+//     segmentPos.y(),
+//     -0.5*length_v,
+//     m_pixelPitch_v.at(layerIndex),
+//     m_pixelCount_v.value().at(layerIndex));
+//   return std::make_tuple(i_u, i_v);
+// } // computePixelIndices()
 
 bool Clustering_Pixels::CheckHitCuts(const edm4hep::TrackerHitPlane& hit) const {
   // verbose() << "   - Checking hit cuts for hit with EDep = " << hit.getEDep() << " keV" << endmsg; // gives segFault ???

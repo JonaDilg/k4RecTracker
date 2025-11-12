@@ -47,14 +47,14 @@ using StaticRootHistogram =
 
 struct Clustering_Pixels final 
   : k4FWCore::MultiTransformer 
-    <std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> (const edm4hep::TrackerHitPlaneCollection&, const edm4hep::EventHeaderCollection&)> {
+    <std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> (const edm4hep::TrackerHitPlaneCollection&,  const edm4hep::TrackerHitSimTrackerHitLinkCollection&, const edm4hep::EventHeaderCollection&)> {
 
   Clustering_Pixels(const std::string& name, ISvcLocator* svcLoc);
   
   StatusCode initialize() override;
   StatusCode finalize() override;
 
-  std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> operator() (const edm4hep::TrackerHitPlaneCollection& hits, const edm4hep::EventHeaderCollection& headers) const override;
+  std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> operator() (const edm4hep::TrackerHitPlaneCollection& hits, const edm4hep::TrackerHitSimTrackerHitLinkCollection& hitLinks, const edm4hep::EventHeaderCollection& headers) const override;
 
 private:
 
@@ -114,6 +114,7 @@ private:
   /* -- Detector & sensor parameters -- */
 
   int m_layerN = -1; // number of layers to digitize. -1 means all layers
+  float m_neighborRadiusHelper[3];
 
   /* -- Counters -- */
 
@@ -137,6 +138,12 @@ private:
 
   Gaudi::Property<std::string> m_localNormalVectorDir{this, "LocalNormalVectorDir", "", "Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). If defined correctly, the local frame is transformed such that z is orthogonal to the sensor plane."};
   Gaudi::Property<std::vector<int>> m_layersToRun{this, "LayersToRun", {}, "Which layers to digitize (0-indexed). If empty, all layers are digitized."};
+
+  /* Notes on the radius:
+   *   - I use radius instead of bins to avoid the complexity of converting position to bin. this is not necessarily the best decision, but it simplifies the code.
+   *   - use pixel-pitch to only use direct neighbors, 1.5*pitch to also include diagonal neighbors. Higher numbers give a larger area, always elliptic. */
+  Gaudi::Property<float> m_neighborRadius_u{this, "NeighborRadius_u", 37.5, "Radius (in um) in which to look for neighbors of a pixel, in u direction"};
+  Gaudi::Property<float> m_neighborRadius_v{this, "NeighborRadius_v", 37.5, "Radius (in um) in which to look for neighbors of a pixel, in v direction"};
 
   /* Debugging */
   Gaudi::Property<bool> m_debugHistograms{this, "DebugHistograms", false, "Whether to create and fill debug histograms. Not recommended for multithreading, might lead to crashes."};
