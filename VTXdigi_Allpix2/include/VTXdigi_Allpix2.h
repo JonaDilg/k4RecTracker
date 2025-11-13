@@ -102,7 +102,7 @@ private:
 
   void initializeServicesAndGeometry();
   void checkGaudiProperties();
-  void setupSensorParameters();
+  void setupAndCheckGeometry();
   void loadKernels();
   void setupDebugHistograms();
   void setupDebugCsvOutput();
@@ -151,14 +151,14 @@ private:
   int computeBinIndex(float x, float binX0, float binWidth, int binN) const;
 
   /** @brief Compute the pixel indices (i_u, i_v) for a given (local) position inside the sensor */
-  std::tuple<int, int> computePixelIndices(const dd4hep::rec::Vector3D& pos, const int layerIndex, const float length_u, const float length_v) const;
+  std::tuple<int, int> computePixelIndices(const dd4hep::rec::Vector3D& pos, const float length_u, const float length_v) const;
   
   /** @brief Compute the in-pixel indices (j_u, j_v, j_w) for a given (local) position inside the pixel and layer index
    *  @note Assumption: each layer has only 1 type if sensor */
-  std::tuple<int, int, int> computeInPixelIndices(const dd4hep::rec::Vector3D& pos, const int layerIndex, const float length_u, const float length_v) const;
+  std::tuple<int, int, int> computeInPixelIndices(const dd4hep::rec::Vector3D& pos, const float length_u, const float length_v) const;
 
   /** @brief Compute the local position of a pixel center (u,v,0) */
-  dd4hep::rec::Vector3D computePixelCenter_Local(const int i_u, const int i_v, const int layerIndex, const dd4hep::rec::ISurface& simSurface) const;
+  dd4hep::rec::Vector3D computePixelCenter_Local(const int i_u, const int i_v, const dd4hep::rec::ISurface& simSurface) const;
   
   /** @brief Find the in-pixel indices (j_u, j_v, j_w) for a given (local) position inside the pixel and layer index
    *  @note Assumption: each layer has only 1 type if sensor */
@@ -214,7 +214,9 @@ private:
 
   const std::string m_undefinedString = "UNDEFINED";
 
-  Gaudi::Property<std::string> m_subDetName{this, "SubDetectorName", m_undefinedString, "Name of the subdetector"};
+  Gaudi::Property<std::string> m_subDetName{this, "SubDetectorName", m_undefinedString, "Name of the subdetector (eg. \"Vertex\")"};
+  Gaudi::Property<std::string> m_subDetChildName{this, "SubDetectorChildName", m_undefinedString, "Name of the subdetector child (eg. \"VertexBarrel\"), if applicable. If undefined, the subdetector itself is assumed to contain layers as children."};
+
   Gaudi::Property<std::string> m_geometryServiceName{this, "GeoSvcName", "GeoSvc", "The name of the GeoSvc instance"}; // what is this for?
   Gaudi::Property<std::string> m_encodingStringVariable{this, "EncodingStringParameterName", "GlobalTrackerReadoutID", "The name of the DD4hep constant that contains the Encoding string for tracking detectors"};
   
@@ -223,8 +225,7 @@ private:
   
   Gaudi::Property<std::vector<int>> m_layersToDigitize{this, "LayersToDigitize", {}, "Which layers to digitize (0-indexed). If empty, all layers are digitized."};
 
-  Gaudi::Property<std::vector<int>> m_pixelCount_u{this, "PixelCount_u", {}, "Number of pixels in direction of u; either one per layer or one for all layers"};
-  Gaudi::Property<std::vector<int>> m_pixelCount_v{this, "PixelCount_v", {}, "Number of pixels in direction of v; either one per layer or one for all layers"};
+  Gaudi::Property<std::vector<int>> m_pixelCount{this, "PixelCount", {}, "Number of pixels in direction of u and v, per layer."};
   
   Gaudi::Property<float> m_targetPathSegmentLength{this, "TargetPathSegmentLength", 0.002, "Length of the path segments, that the simHits path through a sensor is divided into. In mm. Defines the precision of the charge deposition along the path."};
   Gaudi::Property<float> m_pathLengthShorteningFactorGeant4{this, "PathLengthShorteningFactorGeant4", 1.05, "Relative path length (to Geant4 path length), above which the path is shortened to the Geant4 length. (Geant4 length includes multiple scattering and curling in B-field, which are lost in our linear approximation of the path)."};
@@ -250,6 +251,8 @@ private:
   std::unique_ptr<dd4hep::DDSegmentation::BitFieldCoder> m_cellIDdecoder; // Decoder for the cellID
 
   dd4hep::VolumeManager m_volumeManager; // volume manager to get the physical cell sensitive volume
+  const dd4hep::Detector* m_detector = nullptr; // pointer to the DD4hep detector
+  dd4hep::DetElement m_subDetector; // subdetector DetElement. contains layers as children
   SmartIF<IUniqueIDGenSvc> m_uidSvc;
 
   const dd4hep::rec::SurfaceMap* m_simSurfaceMap;
@@ -262,16 +265,16 @@ private:
   
   /* -- Detector & sensor parameters -- */
 
-  int m_layerCount;
-  std::unordered_map<int, int> m_layerToIndex; // layer number (from cellID & m_layersToDigitize) to internal index (0...N-1, where N is the number of layers to digitize)
+  int m_layerCount = 0;
+  std::unordered_map<int, int> m_layerToIndex; // layer number (from cellID & m_layersToDigitize) to internal index (0...N-1, where N is the number of layers to digitize). Needed in case the user specifies non-consecutive layers to digitize.
 
-  std::vector<double> m_sensorThickness;
-  std::vector<double> m_pixelPitch_u;
-  std::vector<double> m_pixelPitch_v;
+  double m_sensorThickness;
+  std::array<float, 2> m_pixelPitch = {0.0f, 0.0f}; // [ layerIndex, pitch_u/pitch_v ]
+  std::array<float, 2> m_sensorLength = {0.0f, 0.0f}; // [ layerIndex, length_u/length_v ]
 
-  int m_inPixelBinCount[3];
-  int m_kernelSize;
-  std::unique_ptr<ChargeSharingKernels> m_chargeSharingKernels; // the charge sharing kernel
+  std::array<int, 3> m_inPixelBinCount = {0, 0, 0};
+  int m_kernelSize = 0;
+  std::unique_ptr<ChargeSharingKernels> m_Kernels; // the charge sharing kernel
 
   /* -- Counters -- */
 
@@ -391,11 +394,6 @@ class VTXdigi_Allpix2::HitInfo {
   float m_simPathLength;
   float m_simMomentum; // magnitude of simHit momentum in GeV/c at the position of the sensor
 
-  float m_length[2]; // sensor length in u and v direction [mm]
-  float m_thickness; // sensor thickness [mm]
-  float m_pixPitch[2]; // pixel pitch in u and v direction [mm]
-  int m_pixCount[2]; // number of pixels in u and v direction
-
   int m_nSegments;
 
   public:
@@ -407,12 +405,9 @@ class VTXdigi_Allpix2::HitInfo {
 
       const auto itSimSurface = vtxdigi_AP2.m_simSurfaceMap->find(m_cellID);
       if (itSimSurface == vtxdigi_AP2.m_simSurfaceMap->end())
-        throw std::runtime_error("VTXdigi_Allpix2::HitInfo constructor (called from VTXdigi_Allpix2::operator()): No simSurface found for cellID " + std::to_string(m_cellID) + ". Did initialize() succeed?");
-
+        throw std::runtime_error("VTXdigi_Allpix2::HitInfo constructor: Could not find SimSurface for first this hit's cellID: " + std::to_string(m_cellID));
       m_simSurface = itSimSurface->second;
-      if (!m_simSurface)
-        throw std::runtime_error("VTXdigi_Allpix2::HitInfo constructor (called from VTXdigi_Allpix2::operator()): SimSurface pointer for cellID " + std::to_string(m_cellID) + " is null. Did initialize() succeed?");
-
+    
       /* Use layer index instead of layer to avoid segfaults, if layers are not numbered consecutively
        * This will throw if layer not in map (ie. layers not-to-be digitized have not beed dismissed yet).*/
       m_layerIndex = vtxdigi_AP2.m_layerToIndex.at(vtxdigi_AP2.m_cellIDdecoder->get(m_cellID, "layer"));
@@ -422,29 +417,7 @@ class VTXdigi_Allpix2::HitInfo {
 
       const edm4hep::Vector3f p = simHit.getMomentum();
       m_simMomentum = sqrt(p.x*p.x + p.y*p.y + p.z*p.z); // in GeV/c
-
-      // sensor dimensions in local frame, in mm
-      m_length[0] = m_simSurface->length_along_u() * 10; // convert to mm
-      m_length[1] = m_simSurface->length_along_v() * 10; // convert to mm
-
-      m_thickness = vtxdigi_AP2.m_sensorThickness.at(m_layerIndex);
-
-      m_pixPitch[0] = vtxdigi_AP2.m_pixelPitch_u.at(m_layerIndex);
-      m_pixPitch[1] = vtxdigi_AP2.m_pixelPitch_v.at(m_layerIndex);
-
-      m_pixCount[0] = vtxdigi_AP2.m_pixelCount_u.value().at(m_layerIndex);
-      m_pixCount[1] = vtxdigi_AP2.m_pixelCount_v.value().at(m_layerIndex);
-
-      /* sanity check: pixel pitch * pixel count must match sensor size from geometry. 
-      * Do this after applying cuts, as non-digitized layers would lead to out-of-bounds access in m_pixelCount_u etc.
-      * Doing this for every simHit is not optimal (because pixPitch and pixCount per layer are constant across all events)
-      * but accessing the surface-based sensor size from initialize() is not easy to implement (without access to a cellID that is known to lie on that layer). */
-      if ( abs(m_pixPitch[0] * m_pixCount[0] - m_length[0]) > vtxdigi_AP2.m_numericLimit_float
-        || abs(m_pixPitch[1] * m_pixCount[1] - m_length[1]) > vtxdigi_AP2.m_numericLimit_float) {
-        throw GaudiException("Gaudi properties (pixelPitch * pixelCount) do not match sensor size from detector geometry in layer " + std::to_string(vtxdigi_AP2.m_cellIDdecoder->get(m_cellID, "layer")) + " in operator().", "VTXdigi_Allpix2::GatherHitInfo()", StatusCode::FAILURE);
-      }
     }
-
 
     inline void setDebugFlag() { m_debugFlag = true; }
     inline bool debugFlag() const { return m_debugFlag; }
@@ -457,11 +430,6 @@ class VTXdigi_Allpix2::HitInfo {
     inline float charge() const { return m_charge; }
     inline float simPathLength() const { return m_simPathLength; }
     inline float simMomentum() const { return m_simMomentum; }
-
-    inline float length(int axis) const { return m_length[axis]; } // axis: 0 = u, 1 = v
-    inline float thickness() const { return m_thickness; }
-    inline float pixPitch(int axis) const { return m_pixPitch[axis]; } // axis: 0 = u, 1 = v
-    inline int pixCount(int axis) const { return m_pixCount[axis]; } // axis: 0 = u, 1 = v  
 
     inline void setNSegments(int n) { m_nSegments = n; }
     inline int nSegments() const { return m_nSegments; }
