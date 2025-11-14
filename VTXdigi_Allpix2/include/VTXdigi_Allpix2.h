@@ -209,13 +209,13 @@ private:
   void fillDebugHistograms_segmentLoop(const HitInfo& hitInfo, const SegmentIndices& segment, int i_m, int i_n, const float sharedCharge) const;
   void fillDebugHistograms_targetPixelLoop(const HitInfo& hitInfo, const HitPosition& hitPos, int i_u, int i_v, float pixelChargeMeasured) const;
   
-
   /* -- Properties -- */
 
   const std::string m_undefinedString = "UNDEFINED";
 
   Gaudi::Property<std::string> m_subDetName{this, "SubDetectorName", m_undefinedString, "Name of the subdetector (eg. \"Vertex\")"};
   Gaudi::Property<std::string> m_subDetChildName{this, "SubDetectorChildName", m_undefinedString, "Name of the subdetector child (eg. \"VertexBarrel\"), if applicable. If undefined, the subdetector itself is assumed to contain layers as children."};
+  Gaudi::Property<std::string> m_readoutName{this, "ReadoutName", m_undefinedString, "Name of the detector readout"};
 
   Gaudi::Property<std::string> m_geometryServiceName{this, "GeoSvcName", "GeoSvc", "The name of the GeoSvc instance"}; // what is this for?
   Gaudi::Property<std::string> m_encodingStringVariable{this, "EncodingStringParameterName", "GlobalTrackerReadoutID", "The name of the DD4hep constant that contains the Encoding string for tracking detectors"};
@@ -225,12 +225,10 @@ private:
   
   Gaudi::Property<std::vector<int>> m_layersToDigitize{this, "LayersToDigitize", {}, "Which layers to digitize (0-indexed). If empty, all layers are digitized."};
 
-  Gaudi::Property<std::vector<int>> m_pixelCount{this, "PixelCount", {}, "Number of pixels in direction of u and v, per layer."};
-  
   Gaudi::Property<float> m_targetPathSegmentLength{this, "TargetPathSegmentLength", 0.002, "Length of the path segments, that the simHits path through a sensor is divided into. In mm. Defines the precision of the charge deposition along the path."};
   Gaudi::Property<float> m_pathLengthShorteningFactorGeant4{this, "PathLengthShorteningFactorGeant4", 1.05, "Relative path length (to Geant4 path length), above which the path is shortened to the Geant4 length. (Geant4 length includes multiple scattering and curling in B-field, which are lost in our linear approximation of the path)."};
   
-  Gaudi::Property<std::vector<int>> m_maxClusterSize{this, "MaximumClusterSize", {15,15}, "Default maximum cluster size [max in u, max in v] in terms of pixels. The area is expanded dynamically if charge is shared to pixels outside of this range, but this is computationally expensive."};
+  Gaudi::Property<std::vector<int>> m_maxClusterSize{this, "MaximumClusterSize", {9,9}, "Default maximum cluster size [max in u, max in v] in terms of pixels. The area is expanded dynamically per event if charge is shared to pixels outside of this range, but this is computationally expensive."};
   Gaudi::Property<float> m_pixelThreshold{this, "PixelThreshold", 100, "Threshold in electrons for a pixel to fire (1 eh-pair = 3.65 eV)"};
   Gaudi::Property<float> m_electronicNoise{this, "PixelElectronicNoise", 20, "Electronic noise in electrons (1 eh-pair = 3.65 eV). Defines the width of the Gaussian noise added to each pixel."};
   Gaudi::Property<float> m_timeSmearFactor{this, "PixelTimeSmear", 0., "Gaussian width for the time smearing applied on the pixel time. Applied for each digiHit individually."};
@@ -268,8 +266,9 @@ private:
   int m_layerCount = 0;
   std::unordered_map<int, int> m_layerToIndex; // layer number (from cellID & m_layersToDigitize) to internal index (0...N-1, where N is the number of layers to digitize). Needed in case the user specifies non-consecutive layers to digitize.
 
-  double m_sensorThickness;
+  std::array<int, 2> m_pixelCount = {0, 0}; // [ layerIndex, size_u/size_v ]
   std::array<float, 2> m_pixelPitch = {0.0f, 0.0f}; // [ layerIndex, pitch_u/pitch_v ]
+  double m_sensorThickness;
   std::array<float, 2> m_sensorLength = {0.0f, 0.0f}; // [ layerIndex, length_u/length_v ]
 
   std::array<int, 3> m_inPixelBinCount = {0, 0, 0};
