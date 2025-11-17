@@ -7,6 +7,7 @@
 
 #include "Gaudi/Accumulators/RootHistogram.h" // added by Jona
 #include "Gaudi/Accumulators/Histogram.h" // added by Jona
+// #include "Gaudi/Accumulators/StaticHistogram.h"
 
 #include "edm4hep/SimTrackerHitCollection.h"
 #include "edm4hep/EventHeaderCollection.h" // added by Jona
@@ -268,7 +269,7 @@ private:
 
   std::array<int, 2> m_pixelCount = {0, 0}; // [ layerIndex, size_u/size_v ]
   std::array<float, 2> m_pixelPitch = {0.0f, 0.0f}; // [ layerIndex, pitch_u/pitch_v ]
-  double m_sensorThickness;
+  float m_sensorThickness;
   std::array<float, 2> m_sensorLength = {0.0f, 0.0f}; // [ layerIndex, length_u/length_v ]
 
   std::array<int, 3> m_inPixelBinCount = {0, 0, 0};
@@ -311,18 +312,36 @@ private:
     histGlobal_chargeCollectionEfficiency,
     histGlobal_pixelChargeMatrix_size_u,
     histGlobal_pixelChargeMatrix_size_v,
-    histArrayLen}; // Global histogram indices (these hists collect from all layers). histArrayLen must be last
+    histGlobalArrayLen}; // Global histogram indices (these hists collect from all layers). histArrayLen must be last
   std::array<
     std::unique_ptr<
       Gaudi::Accumulators::StaticHistogram<
         1,
-        Gaudi::Accumulators::atomicity::full
+        Gaudi::Accumulators::atomicity::full,
+        float
       >
     >, 
-    histArrayLen
-  > m_histogramsGlobal; 
+    histGlobalArrayLen
+  > m_histGlobal; 
 
   enum {
+    histGlobal2d_pathLength_vs_G4PathLength,
+    histGlobal2dArrayLen
+  };
+  std::array<
+    std::unique_ptr<
+      Gaudi::Accumulators::StaticHistogram<
+        2,
+        Gaudi::Accumulators::atomicity::full,
+        float
+      >
+    >, 
+    histGlobal2dArrayLen
+  > m_histGlobal2d;
+
+  enum {
+    hist1d_DigiHitCharge_raw,
+    hist1d_DigiHitCharge_measured,
     hist1d_ClusterSize_raw,
     hist1d_ClusterSize_measured,
     hist1d_IncidentAngle_ThetaLocal,
@@ -335,11 +354,31 @@ private:
       std::unique_ptr<
         Gaudi::Accumulators::StaticHistogram<
           1, 
-          Gaudi::Accumulators::atomicity::full>
+          Gaudi::Accumulators::atomicity::full,
+          float
+        >
       >,
       hist1dArrayLen
     >
-  > m_histograms1d;
+  > m_hist1d;
+
+  enum{
+    histProfile1d_clusterSize_vs_z,
+    histProfile1d_clusterSize_vs_module_z,
+    histProfile1d_clusterSize_vs_moduleID,
+    histProfile1dArrayLen };
+  mutable std::vector<
+    std::array<
+      std::unique_ptr<
+        Gaudi::Accumulators::StaticProfileHistogram<
+          1,
+          Gaudi::Accumulators::atomicity::full,
+          float
+        >
+      >,
+      histProfile1dArrayLen
+    >
+  > m_histProfile1d;  
 
   enum { 
     hist2d_hitMap_simHits,
@@ -347,21 +386,27 @@ private:
     hist2d_pathLength_vs_simHit_v,
     hist2d_pixelChargeMatrixSize,
     hist2d_IncidentAngle,
-    hist2dArrayLen };
+    hist2d_clusterSize_vs_z,
+    hist2d_clusterSize_vs_module_z,
+    hist2d_averageCluster_binary,
+    hist2d_totalCharge_vs_simHitCharge,
+    hist2dArrayLen
+  };
   std::vector<
     std::array<
       std::unique_ptr<
         Gaudi::Accumulators::StaticHistogram<
           2,
-          Gaudi::Accumulators::atomicity::full
+          Gaudi::Accumulators::atomicity::full,
+          float
         >
       >,
       hist2dArrayLen
     >
-  > m_histograms2d;
+  > m_hist2d;
 
   enum {
-    histWeighted2d_averageCluster,
+    histWeighted2d_averageCluster_analog,
     histWeighted2d_chargeOriginU,
     histWeighted2d_chargeOriginV,
     histWeighted2dArrayLen };
@@ -371,7 +416,7 @@ private:
         Gaudi::Accumulators::StaticWeightedHistogram<
           2, 
           Gaudi::Accumulators::atomicity::full,
-          double
+          float
         >
       >,
       histWeighted2dArrayLen
