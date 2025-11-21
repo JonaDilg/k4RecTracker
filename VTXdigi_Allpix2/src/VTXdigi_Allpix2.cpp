@@ -287,6 +287,7 @@ void VTXdigi_Allpix2::setupAndCheckGeometry() {
 
   dd4hep::Detector::HandleMap readoutHandleMap = m_detector->readouts();
   int readoutCount = 0;
+  std::string matchedReadoutKey;
   for (const auto& [readoutKey, readoutHandle] : readoutHandleMap) {
     if (simHitCollectionName.find(readoutKey) != std::string::npos && readoutCount == 0) {
       verbose() << "     - Readout \"" << readoutKey << "\" MATCHES the SimTrackHitCollectionName \"" << simHitCollectionName << "\"." << endmsg;
@@ -295,7 +296,8 @@ void VTXdigi_Allpix2::setupAndCheckGeometry() {
         warning() << "Found multiple (" << readoutCount << ") readouts matching SimTrackHitCollectionName \"" << simHitCollectionName << "\" in detector while checking geometry consistency. Used the first one found. Enable verbose messages for more info." << endmsg;
         continue;
       }
-      
+      matchedReadoutKey = readoutKey;
+
       const dd4hep::Segmentation& segmentation = m_detector->readout(readoutKey).segmentation();
       if (!segmentation.isValid())
         throw GaudiException("Segmentation for readout " + readoutKey + " is not valid while checking geometry consistency.", "VTXdigi_Allpix2::setupAndCheckGeometry()", StatusCode::FAILURE);
@@ -320,6 +322,7 @@ void VTXdigi_Allpix2::setupAndCheckGeometry() {
   if (firstLayer.children().empty())
     throw GaudiException("No modules found in first layer of subDetector " + m_subDetName.value() + " while checking geometry consistency.", "VTXdigi_Allpix2::setupAndCheckGeometry()", StatusCode::FAILURE);
   const auto& firstModule = firstLayer.children().begin()->second;
+
   if (!firstModule)
     throw GaudiException("No modules found in first layer of subDetector " + m_subDetName.value() + " while checking geometry consistency.", "VTXdigi_Allpix2::setupAndCheckGeometry()", StatusCode::FAILURE);
   if (firstModule.children().empty())
@@ -354,8 +357,139 @@ void VTXdigi_Allpix2::setupAndCheckGeometry() {
   m_pixelCount.at(1) = std::round(pixelCountV);
 
   debug() << " - Found sensor parameters: area (" << m_sensorLength.at(0) << " x " << m_sensorLength.at(1) << ") mm, thickness (" << sensorInnerThickness << " + " << sensorOuterThickness << ") = " << m_sensorThickness << " mm, pixel pitch (" << m_pixelPitch.at(0) << " x " << m_pixelPitch.at(1) << ") mm, pixel count (" << m_pixelCount.at(0) << " x " << m_pixelCount.at(1) << "). Start looping through layers and checking for consistency in sensor geometry..." << endmsg;
-  
+
+  /* Check how the local sensor coordinates (u,v,w) are defined wrt. the global detector coordinates (x,y,z)
+  * This is needed st. the B-field that is applied in the Allpix2 simulation for the LUT goes in the correct direction. 
+  * Note: The local coordinate system in DD4hep is different to the one we use.
+  *       The transformation matrix that dd4hep provides needs to be adjusted accordingly. */
+ const float parallelTolerance = 0.2; // tolerance to consider two vectors parallel (in gradient). Necessary for tilted sensors.
+ 
+ const dd4hep::rec::Vector3D globalSensorPos = transformLocalToGlobal(dd4hep::rec::Vector3D(0.,0.,0.), firstSensorVolumeID);
+ 
+ const dd4hep::rec::Vector3D globalSensorPosU = transformLocalToGlobal(dd4hep::rec::Vector3D(1.,0.,0.), firstSensorVolumeID);
+ const dd4hep::rec::Vector3D globalSensorUDir = globalSensorPosU - globalSensorPos;
+ 
+ const dd4hep::rec::Vector3D globalSensorPosV = transformLocalToGlobal(dd4hep::rec::Vector3D(0.,1.,0.), firstSensorVolumeID);
+ const dd4hep::rec::Vector3D globalSensorVDir = globalSensorPosV - globalSensorPos;
+
+ const dd4hep::rec::Vector3D globalSensorPosW = transformLocalToGlobal(dd4hep::rec::Vector3D(0.,0.,1.), firstSensorVolumeID);
+ const dd4hep::rec::Vector3D globalSensorWDir = globalSensorPosW - globalSensorPos; // sensor normal vector in global coordinates
+
+  if (simHitCollectionName.find("barrel") != std::string::npos || 
+  simHitCollectionName.find("Barrel") != std::string::npos ||
+  simHitCollectionName.find("BARREL") != std::string::npos) {
+    /* For a barrel sensor, we expect:
+     *  - u lies in x-y plane, pointing in positive r-phi direction
+     *  - v goes parallel to z (also in the same direct)
+     *  - w is sensor normal, points outward (from IP) */
+    debug() << " - Detected barrel sensors. Checking transformation from local to global coordinates." << endmsg;
+    verbose() << "   - This was inferred by matching \"barrel\" to SimTrackHitCollectionName \"" << simHitCollectionName << "\".  First sensor has global position (" << globalSensorPos.x() << ", " << globalSensorPos.y() << ", " << globalSensorPos.z() << ") mm." << endmsg;
+    
+    /* Check u plane (expected to lie in x-y plane) */ 
+    if ( (globalSensorUDir.z()*globalSensorUDir.z()) > parallelTolerance*parallelTolerance*
+         (globalSensorUDir.x()*globalSensorUDir.x() + globalSensorUDir.y()*globalSensorUDir.y()) ) {
+      warning() << "Local sensor u-direction (1,0,0) has a z component in global coordinates (" << globalSensorUDir.x() << ", " << globalSensorUDir.y() << ", " << globalSensorUDir.z() << ") mm. Thus it does not lie in x-y plane as is expected, likely not matching the definition in Allpix2. This means the Kernel might be rotated or mirrored and the B-field simulated in AP2 might be applied in a wrong direction." << endmsg;
+    }
+
+    /* Check u sign (expected to point in positive r-phi direction) */
+    const float phiSensor = std::atan2(globalSensorPos.y(), globalSensorPos.x());
+    const float phiUDir = std::atan2(globalSensorUDir.y(), globalSensorUDir.x());
+    const float dphi = phiUDir - phiSensor; // angle between position vector and u-direction vector in global coordinates. if this is in [0, pi], a positive change in u corresponds to a positive rotation in phi
+    if (dphi < 0 || dphi > 3.14159265) {
+      warning() << "Sensor u-direction points opposite to the global r-phi direction for barrel sensor at position (" << globalSensorPos.x() << ", " << globalSensorPos.y() << ", " << globalSensorPos.z() << ") mm. The transformation from the global detector coordinates to local sensor does (quite likely) not match the definition in Allpix2. This means the Kernel might be rotated or mirrored, and thus the B-field in the simulation might not be applied in the correct direction." << endmsg;
+    }
+
+    /* Check v axis (expected to be parallel to z) */
+    if ( (globalSensorVDir.x()*globalSensorVDir.x() + globalSensorVDir.y()*globalSensorVDir.y()) > parallelTolerance*parallelTolerance*
+         globalSensorVDir.z()*globalSensorVDir.z() ){
+      warning() << "Local sensor v-direction (0,1,0) has x- or y-components in global coordinates (" << globalSensorVDir.x() << ", " << globalSensorVDir.y() << ", " << globalSensorVDir.z() << "), and is not parallel to z as is expected.  This means the Kernel might be rotated or mirrored and the B-field simulated in AP2 might be applied in a wrong direction." << endmsg;
+    }
+
+    /* Check v sign (expected to point in positive z-direction) */
+    if (globalSensorVDir.z() < 0) {      
+      warning() << "Local sensor v-direction (0,1,0) points opposite to the global z-axis for barrel sensor at position (" << globalSensorPos.x() << ", " << globalSensorPos.y() << ", " << globalSensorPos.z() << ") mm. The transformation from the global detector coordinates to local sensor does (quite likely) not match the definition in Allpix2. This means the Kernel might be rotated or mirrored and the B-field simulated in AP2 might be applied in a wrong direction." << endmsg;
+    }
+
+    /* Check w plane (expected lie in xy-plane) */
+    if (abs(globalSensorWDir.z())/sqrt(globalSensorWDir.x()*globalSensorWDir.x() + globalSensorWDir.y()*globalSensorWDir.y()) > parallelTolerance) {
+      warning() << "Local sensor normal (0,0,1) has a z component in global coordinates (" << globalSensorWDir.x() << ", " << globalSensorWDir.y() << ", " << globalSensorWDir.z() << ") mm. Thus it does not lie in x-y plane as is expected, likely not matching the definition in Allpix2. This means the Kernel might be rotated or mirrored and the B-field simulated in AP2 might be applied in a wrong direction." << endmsg;
+    }
+
+    /* Check w sign (expected to point away from z-axis) */
+    if (globalSensorPos.x()*globalSensorWDir.x() + globalSensorPos.y()*globalSensorWDir.y() < 0.) {
+      warning() << "Sensor normal vector points inward towards the z-axis for barrel sensor at position (" << globalSensorPos.x() << ", " << globalSensorPos.y() << ", " << globalSensorPos.z() << ") mm. The transformation from the global detector coordinates to local sensor does (quite likely) not match the definition in Allpix2. This means the Kernel might be rotated or mirrored, and thus the B-field in the simulation might not be applied in the correct direction." << endmsg;
+    }
+
+    /* Check that w has a bigger radial component than u (ie. u points more outwards)
+     * Idea: The one with the greater dot product with SensorPos must have a greater radial component */
+    const float dotProductU = globalSensorPos.dot(globalSensorUDir);
+    const float dotProductW = globalSensorPos.dot(globalSensorWDir);
+    if (dotProductW < dotProductU) {
+      warning() << "Global sensor normal vector (" << globalSensorWDir.x() << ", " << globalSensorWDir.y() << ", " << globalSensorWDir.z() << ") has a smaller radial component than the u-direction (" << globalSensorUDir.x() << ", " << globalSensorUDir.y() << ", " << globalSensorUDir.z() << "). The transformation from the global detector coordinates to local sensor does (quite likely) not match the definition in Allpix2. This means the Kernel might be rotated or mirrored, and thus the B-field in the simulation might not be applied in the correct direction." << endmsg;
+    }
+    /* TODO: I am sure there is a better way to do these checks, please implement it if you have ideas / find problems. ~ Jona, 2025-11*/
+    
+    debug() << "   - Barrel sensor coordinate system check completed, local coordinates comply with Allpix2 assumptions." << endmsg;
+  }
+  if (simHitCollectionName.find("endcap") != std::string::npos || 
+           simHitCollectionName.find("Endcap") != std::string::npos ||
+           simHitCollectionName.find("ENDCAP") != std::string::npos ||
+           simHitCollectionName.find("disk") != std::string::npos ||
+           simHitCollectionName.find("Disk") != std::string::npos ||
+           simHitCollectionName.find("DISK") != std::string::npos) {
+    /* For an endcap sensor, we expect:
+     *  - u lies in x-y plane, pointing in positive r direction
+     *  - v also lies in x-y planegoes along positive r-phi direction 
+     *  - w is sensor normal, points outward (along z) */
+    debug() << " - Detected endcap sensors. Checking transformation from local to global coordinates." << endmsg;
+    verbose() << "   - This was inferred by matching \"endcap\" or \"disk\" to SimTrackHitCollectionName \"" << simHitCollectionName << "\".  First sensor has global position (" << globalSensorPos.x() << ", " << globalSensorPos.y() << ", " << globalSensorPos.z() << ") mm." << endmsg;
+    
+    /* Check u plane (expected to lie in x-y plane) */ 
+    if (globalSensorUDir.z()*globalSensorUDir.z() > parallelTolerance*parallelTolerance*
+         (globalSensorUDir.x()*globalSensorUDir.x() + globalSensorUDir.y()*globalSensorUDir.y()) ) {
+      warning() << "Local sensor u-direction (1,0,0) has a z component in global coordinates (" << globalSensorUDir.x() << ", " << globalSensorUDir.y() << ", " << globalSensorUDir.z() << ") mm. Thus it does not lie in x-y plane as is expected, likely not matching the definition in Allpix2. This means the Kernel might be rotated or mirrored and the B-field simulated in AP2 might be applied in a wrong direction." << endmsg;
+    }
+
+    /* Check v plane (expected to lie in x-y plane) */
+    if (globalSensorVDir.z()*globalSensorVDir.z() > parallelTolerance*parallelTolerance*
+         (globalSensorVDir.x()*globalSensorVDir.x() + globalSensorVDir.y()*globalSensorVDir.y()) ) {
+      warning() << "Local sensor v-direction (0,1,0) has a z component in global coordinates (" << globalSensorVDir.x() << ", " << globalSensorVDir.y() << ", " << globalSensorVDir.z() << ") mm. Thus it does not lie in x-y plane as is expected, likely not matching the definition in Allpix2. This means the Kernel might be rotated or mirrored and the B-field simulated in AP2 might be applied in a wrong direction." << endmsg;
+    }
+
+    /* Check u sign (expected to point away from z-axis) */
+    if (globalSensorPos.x()*globalSensorUDir.x() + globalSensorPos.y()*globalSensorUDir.y() < 0.) {
+      warning() << "Sensor u-direction points inward towards the z-axis for endcap sensor at position (" << globalSensorPos.x() << ", " << globalSensorPos.y() << ", " << globalSensorPos.z() << ") mm. The transformation from the global detector coordinates to local sensor does (quite likely) not match the definition in Allpix2. This means the Kernel might be rotated or mirrored, and thus the B-field in the simulation might not be applied in the correct direction." << endmsg;
+    }
+
+    /* Check that u has a bigger radial component than v (ie. u points more outwards)
+     * Idea: The one with the greater dot product with SensorPos must have a greater radial component */
+    const float dotProductU = globalSensorPos.dot(globalSensorUDir);
+    const float dotProductV = globalSensorPos.dot(globalSensorVDir);
+    if (dotProductV > dotProductU) {
+      warning() << "Global sensor normal vector (" << globalSensorVDir.x() << ", " << globalSensorVDir.y() << ", " << globalSensorVDir.z() << ") has a smaller radial component than the u-direction (" << globalSensorUDir.x() << ", " << globalSensorUDir.y() << ", " << globalSensorUDir.z() << "). The transformation from the global detector coordinates to local sensor does (quite likely) not match the definition in Allpix2. This means the Kernel might be rotated or mirrored, and thus the B-field in the simulation might not be applied in the correct direction." << endmsg;
+    }
+
+    /* Check w axis (expected to be parallel to z) */
+    if ( sqrt(globalSensorWDir.x()*globalSensorWDir.x() + globalSensorWDir.y()*globalSensorWDir.y()) / abs(globalSensorWDir.z()) > parallelTolerance ) {
+      warning() << "Local sensor normal (0,0,1) has x- or y-components in global coordinates (" << globalSensorWDir.x() << ", " << globalSensorWDir.y() << ", " << globalSensorWDir.z() << "), and is not parallel to z as is expected.  This means the Kernel might be rotated or mirrored and the B-field simulated in AP2 might be applied in a wrong direction." << endmsg;
+    }
+
+    /* Check w sign (expected to point in positive z-direction) */
+    if (globalSensorWDir.z() < 0) {      
+      warning() << "Local sensor normal (0,0,1) points opposite to the global z-axis for endcap sensor at position (" << globalSensorPos.x() << ", " << globalSensorPos.y() << ", " << globalSensorPos.z() << ") mm. The transformation from the global detector coordinates to local sensor does (quite likely) not match the definition in Allpix2. This means the Kernel might be rotated or mirrored and the B-field simulated in AP2 might be applied in a wrong direction." << endmsg;
+    }
+
+    /* TODO: I am sure there is a better way to do these checks, please implement it if you have ideas / find problems. ~ Jona, 2025-11*/
+    
+    debug() << "   - Barrel sensor coordinate system check completed, local coordinates comply with Allpix2 assumptions." << endmsg;
+
+  }
+  else {
+    warning() << " - Could not determine if sensors are in barrel or endcap from SimTrackHitCollectionName \"" << simHitCollectionName << "\" by matching it to \"barrel\", \"endcap\", or \"disk\". The transformation from the global detector coordinates to local sensor coordinates is not guaranteed to match the definition in Allpix2. This means the Kernel might be rotated or mirrored, and thus the B-field in the simulation might not be applied in the correct direction." << endmsg;
+  }
+
   /* check that every sensor in the relevant layers matches the dimensions of the first one we found.*/
+  debug() << " - Looping over layers, modules and sensors in subDetector \"" << m_subDetName.value() << "\" to check for consistent sensor dimensions..." << endmsg;
   for (const auto& [layerName, layer] : m_subDetector.children()) {
     dd4hep::VolumeID layerVolumeID = layer.volumeID();
     int layerNumber = m_cellIDdecoder->get(layerVolumeID, "layer");
@@ -743,14 +877,14 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
     m_hist1d.at(layerIndex).at(hist1d_DigiHitCharge_raw).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float>{this, 
         "DigiHit_Layer"+std::to_string(layer)+"/TotalCharge_Raw",
-        "Sum of digiHit charge per simHit (raw, ie. before noise & threshold);Sum of digiHit charge [e-]",
+        "Sum of digiHit charge per simHit (raw, ie. before noise & threshold) - Layer "+std::to_string(layer)+";Sum of digiHit charge [e-]",
         {1000, 0.f, m_sensorThickness*500000.f}
       }
     );
     m_hist1d.at(layerIndex).at(hist1d_DigiHitCharge_measured).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float>{this, 
         "DigiHit_Layer"+std::to_string(layer)+"/TotalCharge_Measured",
-        "Sum of digiHit charge per simHit (measured, ie. after noise & threshold);Sum of digiHit charge [e-]",
+        "Sum of digiHit charge per simHit (measured, ie. after noise & threshold) - Layer "+std::to_string(layer)+";Sum of digiHit charge [e-]",
         {1000, 0.f, m_sensorThickness*500000.f}
       }
     );
@@ -758,14 +892,14 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
     m_hist1d.at(layerIndex).at(hist1d_ClusterSize_raw).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float>{this, 
         "DigiHit_Layer"+std::to_string(layer)+"/PixelsPerSimHit_Raw",
-        "Number of pixels that receive any charge per simhit;Number of pixels [pix]",
+        "Number of pixels that receive any charge per simhit - Layer "+std::to_string(layer)+";Number of pixels [pix]",
         {50, -0.5f, 49.5f}
       }
     );
     m_hist1d.at(layerIndex).at(hist1d_ClusterSize_measured).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float>{this, 
         "DigiHit_Layer"+std::to_string(layer)+"/PixelsPerSimHit_Measured",
-        "Number of digiHits per simHit (ie. number of pixels above threshold, similar to cluster size);Number of digiHits [pix]",
+        "Number of digiHits per simHit (ie. number of pixels above threshold, similar to cluster size) - Layer "+std::to_string(layer)+";Number of digiHits [pix]",
         {50, -0.5f, 49.5f}
       }
     );
@@ -773,14 +907,14 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
     m_hist1d.at(layerIndex).at(hist1d_IncidentAngle_ThetaLocal).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float>{this, 
         "SimHit/IncidentAngle_LocalTheta_Layer"+std::to_string(layer),
-        "Local theta: particle momentum incident angle to sensor normal;Polar angle [deg]",
+        "Local theta: particle momentum incident angle to sensor normal - Layer "+std::to_string(layer)+";Polar angle [deg]",
         {360, 0.f, 180.f}
       }
     );
     m_hist1d.at(layerIndex).at(hist1d_IncidentAngle_PhiLocal).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float>{this, 
         "SimHit/IncidentAngle_LocalPhi_Layer"+std::to_string(layer),
-        "Local phi: particle momentum incident angle to sensor normal;Azimuthal angle [deg]",
+        "Local phi: particle momentum incident angle to sensor normal - Layer "+std::to_string(layer)+";Azimuthal angle [deg]",
         {360, -180.f, 180.f}
       }
     );
@@ -788,7 +922,7 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
     m_hist1d.at(layerIndex).at(hist1d_SimHitMomentum).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float>{this, 
         "SimHit/SimHitMomentum_Layer"+std::to_string(layer),
-        "Momentum of the simHit particle at sensor position;Momentum [MeV/c]",
+        "Momentum of the simHit particle at sensor position - Layer "+std::to_string(layer)+";Momentum [MeV/c]",
         {10000, 0.f, 5000.f}
       }
     );
@@ -798,21 +932,21 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
     m_histProfile1d.at(layerIndex).at(histProfile1d_clusterSize_vs_z).reset(
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float>{this,
         "DigiHit_Layer"+std::to_string(layer)+"/PixelsPerSimHit_vs_z",
-        "Number of digiHits per simhit vs z position of the simHit (global);SimHit z [mm];Number of digiHits [pix]",
+        "Number of digiHits per simhit vs z position of the simHit - Layer "+std::to_string(layer)+";SimHit z [mm];Number of digiHits [pix]",
         {2000, -500.f, 500.f}
       }
     );
     m_histProfile1d.at(layerIndex).at(histProfile1d_clusterSize_vs_module_z).reset(
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float>{this,
         "DigiHit_Layer"+std::to_string(layer)+"/PixelsPerSimHit_vs_Module_z",
-        "Number of digiHits per simhit vs z position of the module (global);SimHit z [mm];Number of digiHits [pix]",
+        "Number of digiHits per simhit vs z position of the module - Layer "+std::to_string(layer)+";SimHit z [mm];Number of digiHits [pix]",
         {2000, -500.f, 500.f}
       }
     );
     m_histProfile1d.at(layerIndex).at(histProfile1d_clusterSize_vs_moduleID).reset(
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float>{this,
         "DigiHit_Layer"+std::to_string(layer)+"/PixelsPerSimHit_vs_ModuleID",
-        "Number of digiHits per simhit vs Module ID;Module ID;Number of digiHits [pix]",
+        "Number of digiHits per simhit vs Module ID - Layer "+std::to_string(layer)+";Module ID;Number of digiHits [pix]",
         {2000, -0.5f, 1999.5f}
       }
     );
@@ -822,7 +956,7 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
     m_hist2d.at(layerIndex).at(hist2d_hitMap_simHits).reset(
       new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float>{this, 
         "DigiHit_Layer"+std::to_string(layer)+"/HitMap_simHits",
-        "SimHit Hitmap, Layer " + std::to_string(layer) + ";u [pix]; v [pix]",
+        "SimHit Hitmap - Layer " + std::to_string(layer) + ";u [pix]; v [pix]",
         {static_cast<unsigned int>(m_pixelCount.at(0)), -0.5f, static_cast<float>(m_pixelCount.at(0)+0.5f)},
         {static_cast<unsigned int>(m_pixelCount.at(1)), -0.5f, static_cast<float>(m_pixelCount.at(1)+0.5f)}
       }
@@ -830,7 +964,7 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
     m_hist2d.at(layerIndex).at(hist2d_hitMap_digiHits).reset(
       new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float>{this, 
         "DigiHit_Layer"+std::to_string(layer)+"/HitMap_digiHits",
-        "DigiHit Hitmap, Layer " + std::to_string(layer) + ";u [pix]; v [pix]",
+        "DigiHit Hitmap - Layer " + std::to_string(layer) + ";u [pix]; v [pix]",
         {static_cast<unsigned int>(m_pixelCount.at(0)), -0.5f, static_cast<float>(m_pixelCount.at(0)+0.5f)},
         {static_cast<unsigned int>(m_pixelCount.at(1)), -0.5f, static_cast<float>(m_pixelCount.at(1)+0.5f)}
       }
@@ -838,7 +972,7 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
     m_hist2d.at(layerIndex).at(hist2d_pathLength_vs_simHit_v).reset(
       new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float>{this, 
         "SimHit/PathLength_vs_z_2D_Layer"+std::to_string(layer),
-        "Path length in sensor active volume (as computed here and used for charge sharing) vs. simHit z position (global), Layer " + std::to_string(layer) + ";SimHit z [mm];Path length [um]",
+        "Path length in sensor active volume (as computed here and used for charge sharing) vs. simHit z position (global) - Layer " + std::to_string(layer) + ";SimHit z [mm];Path length [um]",
         {2000, -500.f, 500.f},
         {200, 0., 20*m_sensorThickness*1000} // in um
       }
@@ -846,7 +980,7 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
     m_hist2d.at(layerIndex).at(hist2d_pixelChargeMatrixSize).reset(
       new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float>{this, 
         "DigiHit_Layer"+std::to_string(layer)+"/PixelChargeMatrixSize",
-        "Pixel Charge Matrix Size, Layer " + std::to_string(layer) + ";u [pix];v [pix]",
+        "Pixel Charge Matrix Size - Layer " + std::to_string(layer) + ";u [pix];v [pix]",
         {100, -0.5f, 99.5f},
         {100, -0.5f, 99.5f}
       }
@@ -854,7 +988,7 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
     m_hist2d.at(layerIndex).at(hist2d_IncidentAngle).reset(
       new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float>{this, 
         "SimHit/IncidentAngle_2D_Layer"+std::to_string(layer),
-        "Incident particle angle to sensor normal, Layer " + std::to_string(layer) + ";Local phi [deg];Local theta [deg]",
+        "Incident particle angle to sensor normal - Layer " + std::to_string(layer) + ";Local phi [deg];Local theta [deg]",
         {360, -180.f, 180.f},
         {360, 0.f, 180.f}
       }
@@ -863,7 +997,7 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
     m_hist2d.at(layerIndex).at(hist2d_clusterSize_vs_z).reset(
       new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float>{this, 
         "DigiHit_Layer"+std::to_string(layer)+"/PixelsPerSimHit_vs_z_2D",
-        "Number of digiHits per simhit vs z position of the simHit (global), Layer " + std::to_string(layer) + ";SimHit z [mm];Number of digiHits [pix]",
+        "Number of digiHits per simhit vs z position of the simHit (global) - Layer " + std::to_string(layer) + ";SimHit z [mm];Number of digiHits [pix]",
         {2000, -500.f, 500.f},
         {20, -0.5f, 19.5f}
       }
@@ -871,7 +1005,7 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
     m_hist2d.at(layerIndex).at(hist2d_clusterSize_vs_module_z).reset(
       new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float>{this, 
         "DigiHit_Layer"+std::to_string(layer)+"/PixelsPerSimHit_vs_z_2D",
-        "Number of digiHits per simhit vs z position of the module (global), Layer " + std::to_string(layer) + ";Module z [mm];Number of digiHits [pix]",
+        "Number of digiHits per simhit vs z position of the module (global) - Layer " + std::to_string(layer) + ";Module z [mm];Number of digiHits [pix]",
         {2000, -500.f, 500.f},
         {20, -0.5f, 19.5f}
       }
@@ -879,7 +1013,7 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
     m_hist2d.at(layerIndex).at(hist2d_averageCluster_binary).reset(
       new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float>{this, 
         "DigiHit_Layer"+std::to_string(layer)+"/AverageCluster_binary",
-        "Layout of the pixels above threshold per simHit (central pixel is defined by the simHit), Layer " + std::to_string(layer) +";u [pix]; v [pix]",
+        "Layout of the pixels above threshold per simHit (central pixel is defined by the simHit) - Layer " + std::to_string(layer) +";u [pix]; v [pix]",
         {static_cast<unsigned int>(m_maxClusterSize.value().at(0)),
           -static_cast<float>(m_maxClusterSize.value().at(0))/2,
           static_cast<float>(m_maxClusterSize.value().at(0))/2},
@@ -891,7 +1025,7 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
     m_hist2d.at(layerIndex).at(hist2d_totalCharge_vs_simHitCharge).reset(
       new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float>{this,
         "DigiHit_Layer"+std::to_string(layer)+"/TotalDigiHitCharge_vs_SimHitCharge",
-        "Sum of digiHit charge (per simHit) vs simHit deposited charge, Layer " + std::to_string(layer) + ";SimHit deposited charge [e-];Sum of digiHit charge [e-]",
+        "Sum of digiHit charge (per simHit) vs simHit deposited charge - Layer " + std::to_string(layer) + ";SimHit deposited charge [e-];Sum of digiHit charge [e-]",
         {1000, 0.f, m_sensorThickness*500000.f},
         {1000, 0.f, m_sensorThickness*500000.f}
       }
@@ -902,7 +1036,7 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
     m_histWeighted2d.at(layerIndex).at(histWeighted2d_averageCluster_analog).reset(
       new Gaudi::Accumulators::StaticWeightedHistogram<2, Gaudi::Accumulators::atomicity::full, float>{this,
         "DigiHit_Layer"+std::to_string(layer)+"/AverageCluster_analog",
-        "Layout of the charge collection per simHit (central pixel is defined by the simHit), Layer " + std::to_string(layer) +";u [pix]; v [pix]",
+        "Layout of the charge collection per simHit (central pixel is defined by the simHit) - Layer " + std::to_string(layer) +";u [pix]; v [pix]",
         {static_cast<unsigned int>(m_maxClusterSize.value().at(0)),
           -static_cast<float>(m_maxClusterSize.value().at(0))/2,
           static_cast<float>(m_maxClusterSize.value().at(0))/2},
@@ -914,7 +1048,7 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
     m_histWeighted2d.at(layerIndex).at(histWeighted2d_chargeOriginU).reset(
       new Gaudi::Accumulators::StaticWeightedHistogram<2, Gaudi::Accumulators::atomicity::full, float>{this,
         "DigiHit_Layer"+std::to_string(layer)+"/ChargeOrigin_u",
-        "Charge collected from in-pix bins in u, Layer " + std::to_string(layer) + ";u pos. relative to collecting pixel center [pix]; w pos. [um]",
+        "Charge collected from in-pix bins in u - Layer " + std::to_string(layer) + ";u pos. relative to collecting pixel center [pix]; w pos. [um]",
         {static_cast<unsigned int>(m_kernelSize*m_inPixelBinCount[0]),
           -static_cast<float>(m_kernelSize)/2,
           static_cast<float>(m_kernelSize)/2},
@@ -926,7 +1060,7 @@ void VTXdigi_Allpix2::setupDebugHistograms() {
     m_histWeighted2d.at(layerIndex).at(histWeighted2d_chargeOriginV).reset(
       new Gaudi::Accumulators::StaticWeightedHistogram<2, Gaudi::Accumulators::atomicity::full, float>{this,
         "DigiHit_Layer"+std::to_string(layer)+"/ChargeOrigin_v",
-        "Charge collected from in-pix bins in v, Layer " + std::to_string(layer) + ";v pos. relative to collecting pixel center [pix]; w pos. [um]",
+        "Charge collected from in-pix bins in v - Layer " + std::to_string(layer) + ";v pos. relative to collecting pixel center [pix]; w pos. [um]",
         {static_cast<unsigned int>(m_kernelSize*m_inPixelBinCount[1]),
           -static_cast<float>(m_kernelSize)/2,
           static_cast<float>(m_kernelSize)/2},
@@ -1495,28 +1629,17 @@ TGeoHMatrix VTXdigi_Allpix2::computeTransformationMatrix(const dd4hep::DDSegment
 
   TGeoHMatrix transformationMatrix = m_volumeManager.lookupDetElement(cellID).nominal().worldTransformation(); // given in cm
 
-  // rotation is unitless, but need to convert translation from cm to mm
+  /* rotation is unitless, but need to convert translation from cm to mm */
   double* translationComponent = transformationMatrix.GetTranslation();
   translationComponent[0] = translationComponent[0] * 10; // convert to mm
   translationComponent[1] = translationComponent[1] * 10;
   translationComponent[2] = translationComponent[2] * 10;
   transformationMatrix.SetTranslation(translationComponent);
 
-  setProperDirectFrame(transformationMatrix); // Change coordinates to have z orthogonal to sensor, with direct (right-handed) frame
-
-  return transformationMatrix;
-}
-TGeoHMatrix VTXdigi_Allpix2::computeTransformationMatrix(const edm4hep::SimTrackerHit& simHit) const {
-  return computeTransformationMatrix(simHit.getCellID());
-}
-
-void VTXdigi_Allpix2::setProperDirectFrame(TGeoHMatrix& transformationMatrix) const {
-  /** Change the transformationMatrix to have a direct frame with z orthogonal to sensor simSurface
-   * 
-   * copied from https://github.com/jessy-daniel/k4RecTracker/blob/New_Detailed_VTXdigitizer/VTXdigiDetailed/src/VTXdigitizerDetailed.cpp
-   * I don't really understand what it does. Defaults to do nothing though, that's ok with me. ~ Jona, 2025-09
-   */
-  
+  /* Rotate and mirror the transformationMatrix to have a direct frame with z orthogonal to sensor simSurface
+   * (a) right-handed and (b) has z perpendicular to sensor plane. see the checks in setupAndCheckGeometry() for details.
+   * This is necessary to correctly calculate the drift in X-Y due to B-field, as our coordinate system needs to match the one in AP2.
+   * I basically copied this from https://github.com/jessy-daniel/k4RecTracker/blob/New_Detailed_VTXdigitizer/VTXdigiDetailed/src/VTXdigitizerDetailed.cpp */
   std::string localNormalVectorDir = m_localNormalVectorDir;
   bool IsDirect = true; // Is the origin frame direct ?
   if (localNormalVectorDir[0]=='-') {
@@ -1524,21 +1647,30 @@ void VTXdigi_Allpix2::setProperDirectFrame(TGeoHMatrix& transformationMatrix) co
     localNormalVectorDir = localNormalVectorDir[1];
   }  
 
-  // If the orthogonal direction is along X or Y in local frame, rotate the frame to have Z orthogonal to sensors instead
+  /* If the orthogonal direction is along X or Y in local frame, rotate the frame to have Z orthogonal to sensors instead */
   if (localNormalVectorDir=="x") {
     TGeoRotation rot("rot",90.,90.,0.); // X->Z / Y->X / Z->Y
     transformationMatrix.Multiply(rot);
   }
-  if (localNormalVectorDir=="y") {
+  else if (localNormalVectorDir=="y") {
     TGeoRotation rot("rot",0.,-90.,0.); // X->X / Y->Z / Z->-Y
     transformationMatrix.Multiply(rot);
   }
+  else if (localNormalVectorDir!="z") {
+    throw std::runtime_error("VTXdigi_Allpix2::computeTransformationMatrix(): Invalid localNormalVectorDir. Must be 'x', 'y', 'z', '-x', '-y' or '-z' (use x for IDEA vertex barrel).");
+  }
 
-  // If the frame isn't direct, make it direct by reflecting the x axis. This is necessary to correctly calculte the drift in X-Y due to B-field
+  /* If the frame isn't direct, make it direct by reflecting the x axis. This is necessary to correctly calculte the drift in X-Y due to B-field
+   * TODO: this is does not cover all cases, ie. needing to relect y or z. Maybe this is not necessary due to constraints in dd4hep. ~ Jona, 2025-11 */
   if (!IsDirect) {
     transformationMatrix.ReflectX(false);
   }
-} // setProperDirectFrame()
+
+  return transformationMatrix;
+}
+TGeoHMatrix VTXdigi_Allpix2::computeTransformationMatrix(const edm4hep::SimTrackerHit& simHit) const {
+  return computeTransformationMatrix(simHit.getCellID());
+}
 
 dd4hep::rec::Vector3D VTXdigi_Allpix2::transformGlobalToLocal(const dd4hep::rec::Vector3D& globalPos, const dd4hep::DDSegmentation::CellID& cellID) const {
 

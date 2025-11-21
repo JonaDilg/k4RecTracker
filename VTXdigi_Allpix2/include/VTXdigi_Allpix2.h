@@ -173,11 +173,6 @@ private:
   /** @copydoc computeTransformationMatrix(const edm4hep::SimTrackerHit&) */
   TGeoHMatrix computeTransformationMatrix(const dd4hep::DDSegmentation::CellID& cellID) const;
 
-  /** @brief Adjust the transformation matrix to the local sensor frame.
-   * Such that the coordinate system is x-u, y-v, z-n and right-handed. Uses user-input "LocalNormalVectorDir"
-   */
-  void setProperDirectFrame(TGeoHMatrix& sensorTransformMatrix) const;
-  
   /** @brief Transform a global position to the local sensor frame of a hit, given its cellID */
   dd4hep::rec::Vector3D transformGlobalToLocal(const dd4hep::rec::Vector3D& globalPos, const dd4hep::DDSegmentation::CellID& cellID) const;
 
@@ -216,7 +211,6 @@ private:
 
   Gaudi::Property<std::string> m_subDetName{this, "SubDetectorName", m_undefinedString, "Name of the subdetector (eg. \"Vertex\")"};
   Gaudi::Property<std::string> m_subDetChildName{this, "SubDetectorChildName", m_undefinedString, "Name of the subdetector child (eg. \"VertexBarrel\"), if applicable. If undefined, the subdetector itself is assumed to contain layers as children."};
-  Gaudi::Property<std::string> m_readoutName{this, "ReadoutName", m_undefinedString, "Name of the detector readout"};
 
   Gaudi::Property<std::string> m_geometryServiceName{this, "GeoSvcName", "GeoSvc", "The name of the GeoSvc instance"}; // what is this for?
   Gaudi::Property<std::string> m_encodingStringVariable{this, "EncodingStringParameterName", "GlobalTrackerReadoutID", "The name of the DD4hep constant that contains the Encoding string for tracking detectors"};
@@ -234,7 +228,7 @@ private:
   Gaudi::Property<float> m_electronicNoise{this, "PixelElectronicNoise", 20, "Electronic noise in electrons (1 eh-pair = 3.65 eV). Defines the width of the Gaussian noise added to each pixel."};
   Gaudi::Property<float> m_timeSmearFactor{this, "PixelTimeSmear", 0., "Gaussian width for the time smearing applied on the pixel time. Applied for each digiHit individually."};
   
-  Gaudi::Property<std::string> m_localNormalVectorDir{this, "LocalNormalVectorDir", "", "Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). If defined correctly, the local frame is transformed such that z is orthogonal to the sensor plane."};
+  Gaudi::Property<std::string> m_localNormalVectorDir{this, "LocalNormalVectorDir", "x", "Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). A negative sign inverts the u-axis, st. a LH coordinate system is transformed to a RH system. Global coordinates (x,y,z) are FCC coordinate system (see FSR). Local coordinates (u,v,w) are defined st. u x v spans the sensor plane and w is the normal vectpor. u goes dominantly in r-phi direction, v is dominantly parallel to z, and w points away from the IP (this results in a RH coordinate system). Possible values: x, y, z, -x, -y, -z, defaults to x (which is correct for IDEA vertex barrel)."};
 
   /* Kernel import properties */
   Gaudi::Property<std::vector<float>> m_globalKernel{this, "GlobalKernel", {}, "Flat vector containing the global charge sharing kernel in row-major order (ie. row-by-row), starting on top left. Length must be KernelSize*KernelSize"};
@@ -312,7 +306,8 @@ private:
     histGlobal_chargeCollectionEfficiency,
     histGlobal_pixelChargeMatrix_size_u,
     histGlobal_pixelChargeMatrix_size_v,
-    histGlobalArrayLen}; // Global histogram indices (these hists collect from all layers). histArrayLen must be last
+    histGlobalArrayLen
+  }; // Global histogram indices (these hists collect from all layers). histArrayLen must be last
   std::array<
     std::unique_ptr<
       Gaudi::Accumulators::StaticHistogram<
