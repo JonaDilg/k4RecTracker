@@ -96,26 +96,26 @@ private:
    * @note Matrix size starts from property "MaximumClusterSize" and expands dynamically if charge is shared to pixels outside of that range */
   class PixelChargeMatrix;
   
-  /** @brief Class to store and access charge sharing kernels */
-  class ChargeSharingKernels;
+  /** @brief Class to store and access lookup table, containing a charge sharing matrix per in-pixel bin  */
+  class LookupTable;
 
   /* ---- Initialization & finalization functions ---- */
 
-  void initializeServicesAndGeometry();
-  void checkGaudiProperties();
-  void setupAndCheckGeometry();
-  void loadKernels();
-  void setupDebugHistograms();
-  void setupDebugCsvOutput();
+  void InitServicesAndGeometry();
+  void InitGaudiProperties();
+  void InitDetectorGeometry();
+  void InitLookupTable();
+  void InitHistograms();
+  void InitCsvOutput();
 
-  void printCountersSummary() const;
+  void PrintCounterSummary() const;
 
   /* ---- Core algorithm functions ---- */
 
   /** @brief Initial checks before processing an event.
    * @return true if setup is OK and event can be processed, false if event has no simHits 
-   * @note throws if chargeSharingKernels or surfaceMap are invalid */
-  bool CheckInitialSetup(const edm4hep::SimTrackerHitCollection& simHits, const edm4hep::EventHeaderCollection& headers) const;
+   * @note throws if LookupTables or surfaceMap are invalid */
+  bool CheckEventSetup(const edm4hep::SimTrackerHitCollection& simHits, const edm4hep::EventHeaderCollection& headers) const;
 
   /** @brief Apply layer cuts to a simHit: reject hits not on layers to be digitized, if Gaudi property "LayersToDigitize" is set.
    * @return true if the hit is accepted, false if dismissed. */
@@ -123,13 +123,13 @@ private:
 
   /** @brief Gather hit information and position from a simHit.
    * @return A tuple containing the hit information and position. */
-  std::tuple<HitInfo, HitPosition> GatherHitInfoAndPosition(const edm4hep::SimTrackerHit& simHit, const edm4hep::EventHeaderCollection& headers) const;
+  std::tuple<HitInfo, HitPosition> GatherHitInfoAndPositions(const edm4hep::SimTrackerHit& simHit, const edm4hep::EventHeaderCollection& headers) const;
 
   /** @brief Apply cuts to a simHit. 
    * @return true if the hit is accepted, false if dismissed. */
   bool CheckSimHitCuts(const HitInfo& hitInfo, const HitPosition& hitPos) const;
 
-  /** @brief Loop over the path segments and share each segments deposited charge among its neighbors according to the charge sharing kernels.
+  /** @brief Loop over the path segments and share each segments deposited charge among its neighbors according to the charge sharing matrix.
    * @return A PixelChargeMatrix containing the charge deposited in each pixel around the simHit.
    * @note Noise has not yet been generated for the pixelChargeMatrix. */
   PixelChargeMatrix DepositAndCollectCharge(HitInfo& hitInfo, const HitPosition& hitPos) const;
@@ -137,11 +137,6 @@ private:
   /** @brief Find pixels with charge above threshold in pixelChargeMatrix, create digiHits and fill digiHits and digiHitsLinks collections */
   void AnalyseSharedCharge(const HitInfo& hitInfo, const HitPosition& hitPos, const PixelChargeMatrix& pixelChargeMatrix, const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks) const;
   
-  /** @brief Fill debug histograms.
-   * @note Contains a very similar loop to AnalyseSharedCharge, but does not create digiHits. This optimises performance with debug histograms disabled.*/
-  void FillGeneralDebugHistograms(HitInfo& hitInfo, const HitPosition& hitPos, const PixelChargeMatrix& pixelChargeMatrix) const;
-
-
   /* ---- Helper functions (called by core algorithm functions) ---- */
 
   /* -- Pixel and in-pixel binning magic (logic) -- */
@@ -149,61 +144,68 @@ private:
   /** @brief Given a histogram definition (x0, binWidth, nBins) and a value x, compute the bin index i in which x falls.
    * @return Int, -1 if x is out of range.
    * @note Bins are 0-indexed (vs ROOT's 1-indexing) */
-  int computeBinIndex(float x, float binX0, float binWidth, int binN) const;
+  int ComputeBinIndex(float x, float binX0, float binWidth, int binN) const;
 
   /** @brief Compute the pixel indices (i_u, i_v) for a given (local) position inside the sensor */
-  std::tuple<int, int> computePixelIndices(const dd4hep::rec::Vector3D& pos, const float length_u, const float length_v) const;
+  std::tuple<int, int> ComputePixelIndices(const dd4hep::rec::Vector3D& pos, const float length_u, const float length_v) const;
   
   /** @brief Compute the in-pixel indices (j_u, j_v, j_w) for a given (local) position inside the pixel and layer index
    *  @note Assumption: each layer has only 1 type if sensor */
-  std::tuple<int, int, int> computeInPixelIndices(const dd4hep::rec::Vector3D& pos, const float length_u, const float length_v) const;
+  std::tuple<int, int, int> ComputeInPixelIndices(const dd4hep::rec::Vector3D& pos, const float length_u, const float length_v) const;
 
   /** @brief Compute the local position of a pixel center (u,v,0) */
-  dd4hep::rec::Vector3D computePixelCenter_Local(const int i_u, const int i_v, const dd4hep::rec::ISurface& simSurface) const;
+  dd4hep::rec::Vector3D ComputePixelCenter_Local(const int i_u, const int i_v, const dd4hep::rec::ISurface& simSurface) const;
   
   /** @brief Find the in-pixel indices (j_u, j_v, j_w) for a given (local) position inside the pixel and layer index
    *  @note Assumption: each layer has only 1 type if sensor */
-  SegmentIndices computeSegmentIndices(HitInfo& hitInfo, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const int segment) const;
+  SegmentIndices ComputeSegmentIndices(HitInfo& hitInfo, const dd4hep::rec::Vector3D& simHitEntryPos, const dd4hep::rec::Vector3D& simHitPath, const int segment) const;
 
 
   /* -- Transformation between global frame and local sensor frame -- */
 
   /** @brief Computes the transformation matrix to the local sensor frame */
-  TGeoHMatrix computeTransformationMatrix(const edm4hep::SimTrackerHit& simHit) const;
-  /** @copydoc computeTransformationMatrix(const edm4hep::SimTrackerHit&) */
-  TGeoHMatrix computeTransformationMatrix(const dd4hep::DDSegmentation::CellID& cellID) const;
+  TGeoHMatrix ComputeTransformationMatrix(const edm4hep::SimTrackerHit& simHit) const;
+  /** @copydoc ComputeTransformationMatrix(const edm4hep::SimTrackerHit&) */
+  TGeoHMatrix ComputeTransformationMatrix(const dd4hep::DDSegmentation::CellID& cellID) const;
 
   /** @brief Transform a global position to the local sensor frame of a hit, given its cellID */
-  dd4hep::rec::Vector3D transformGlobalToLocal(const dd4hep::rec::Vector3D& globalPos, const dd4hep::DDSegmentation::CellID& cellID) const;
+  dd4hep::rec::Vector3D TransformGlobalToLocal(const dd4hep::rec::Vector3D& globalPos, const dd4hep::DDSegmentation::CellID& cellID) const;
 
   /** @brief Transform a local sensor position to the global frame, given the sensors cellID */
-  dd4hep::rec::Vector3D transformLocalToGlobal(const dd4hep::rec::Vector3D& localPos, const dd4hep::DDSegmentation::CellID& cellID) const;
+  dd4hep::rec::Vector3D TransformLocalToGlobal(const dd4hep::rec::Vector3D& localPos, const dd4hep::DDSegmentation::CellID& cellID) const;
 
 
   /* -- Other helper functions -- */
 
   /** @brief Simply convert EDM4HEP vector to DD4HEP vector, and vice versa */
-  dd4hep::rec::Vector3D convertVector(edm4hep::Vector3d vec) const;
-  /** @copydoc convertVector(edm4hep::Vector3d) */
-  edm4hep::Vector3d convertVector(dd4hep::rec::Vector3D vec) const;
+  dd4hep::rec::Vector3D ConvertVector(edm4hep::Vector3d vec) const;
+  /** @copydoc ConvertVector(edm4hep::Vector3d) */
+  edm4hep::Vector3d ConvertVector(dd4hep::rec::Vector3D vec) const;
 
   /** @brief Calculate the entry point and path vector of a simHit (in local sensor frame).
    * @return A tuple containing (0) the entryPoint into the sensor and (1) the path vector through the sensor */
-  std::tuple<dd4hep::rec::Vector3D, dd4hep::rec::Vector3D> constructSimHitPath(HitInfo& hitInfo, HitPosition& hitPos, const edm4hep::SimTrackerHit& simHit) const;
+  std::tuple<dd4hep::rec::Vector3D, dd4hep::rec::Vector3D> ConstructSimHitPath(HitInfo& hitInfo, HitPosition& hitPos, const edm4hep::SimTrackerHit& simHit) const;
 
-  /** @brief Calculate the clipping factors for the path of a simHit in local sensor frame. Called in constructSimHitPath() */
-  std::tuple<float, float> computePathClippingFactors(float t_min, float t_max, const float entryPos_ax, const float pathLength_ax, const float sensorLength_ax) const;
+  /** @brief Calculate the clipping factors for the path of a simHit in local sensor frame. Called in ConstructSimHitPath() */
+  std::tuple<float, float> ComputePathClippingFactors(float t_min, float t_max, const float entryPos_ax, const float pathLength_ax, const float sensorLength_ax) const;
 
-  void collectSegmentCharge(HitInfo& hitInfo, PixelChargeMatrix& pixelChargeMatrix, const SegmentIndices& segment, const float segmentCharge) const;
+  /** @brief Distribute the charge of a path segment to the pixels it covers */
+  void DistributeSegmentCharge(HitInfo& hitInfo, PixelChargeMatrix& pixelChargeMatrix, const SegmentIndices& segment, const float segmentCharge) const;
 
   /** @brief Create a digitized hit*/
-  void createDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const dd4hep::rec::Vector3D& position, const float charge) const;
+  void CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const dd4hep::rec::Vector3D& position, const float charge) const;
 
   /** @brief Write simHit & path information to the debugging CSV file. Definitely not thread-safe. */
-  void appendSimHitToCsv(const HitInfo& hitInfo, const HitPosition& hitPos, const int i_u, const int i_v) const;
+  void AppendSimHitToCsv(const HitInfo& hitInfo, const HitPosition& hitPos, const int i_u, const int i_v) const;
 
-  void fillDebugHistograms_segmentLoop(const HitInfo& hitInfo, const SegmentIndices& segment, int i_m, int i_n, const float sharedCharge) const;
-  void fillDebugHistograms_targetPixelLoop(const HitInfo& hitInfo, const HitPosition& hitPos, int i_u, int i_v, float pixelChargeMeasured) const;
+  /** @brief Fill debug histograms (executed once per simHit). */
+  void FillHistograms_PerSimHit(HitInfo& hitInfo, const HitPosition& hitPos, const PixelChargeMatrix& pixelChargeMatrix) const;
+
+  /** @brief Fill debug histograms (executed once per path segment). */
+  void FillHistograms_PerSegment(const HitInfo& hitInfo, const SegmentIndices& segment, int i_m, int i_n, const float sharedCharge) const;
+
+  /** @brief Fill debug histograms (executed once per pixel hit per simHit). */
+  void FillHistograms_PerPixelHit(const HitInfo& hitInfo, const HitPosition& hitPos, int i_u, int i_v, float pixelChargeMeasured) const;
   
   /* -- Properties -- */
 
@@ -230,9 +232,9 @@ private:
   
   Gaudi::Property<std::string> m_localNormalVectorDir{this, "LocalNormalVectorDir", "x", "Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). A negative sign inverts the u-axis, st. a LH coordinate system is transformed to a RH system. Global coordinates (x,y,z) are FCC coordinate system (see FSR). Local coordinates (u,v,w) are defined st. u x v spans the sensor plane and w is the normal vectpor. u goes dominantly in r-phi direction, v is dominantly parallel to z, and w points away from the IP (this results in a RH coordinate system). Possible values: x, y, z, -x, -y, -z, defaults to x (which is correct for IDEA vertex barrel)."};
 
-  /* Kernel import properties */
-  Gaudi::Property<std::vector<float>> m_globalKernel{this, "GlobalKernel", {}, "Flat vector containing the global charge sharing kernel in row-major order (ie. row-by-row), starting on top left. Length must be KernelSize*KernelSize"};
-  Gaudi::Property<std::string> m_kernelFileName{this, "KernelFileName", "", "Name of the file supplying the charge sharing kernel."};
+  /* LUT import properties */
+  Gaudi::Property<std::vector<float>> m_globalSharingMatrix{this, "GlobalChargeSharingMatrix", {}, "Flat vector containing one charge sharing matrix to be applied globally. In row-major order (ie. row-by-row), starting on top left. Length must be MatrixSize*MatrixSize"};
+  Gaudi::Property<std::string> m_LUTFileName{this, "LookupTableFileName", "", "Name of the file supplying the charge sharing lookup table."};
 
   /* Debugging */
   Gaudi::Property<bool> m_debugHistograms{this, "DebugHistograms", false, "Whether to create and fill debug histograms. Not recommended for multithreading, might lead to crashes."};
@@ -267,8 +269,8 @@ private:
   std::array<float, 2> m_sensorLength = {0.0f, 0.0f}; // [ layerIndex, length_u/length_v ]
 
   std::array<int, 3> m_inPixelBinCount = {0, 0, 0};
-  int m_kernelSize = 0;
-  std::unique_ptr<ChargeSharingKernels> m_Kernels; // the charge sharing kernel
+  int m_matrixSize = 0;
+  std::unique_ptr<LookupTable> m_LUT; // the charge sharing lookup table
 
   /* -- Counters -- */
 
@@ -417,9 +419,7 @@ private:
       histWeighted2dArrayLen
     >
   > m_histWeighted2d;
-
-  /* TODO: implement having a set of kernels per layer (array of unique_ptr ?) */
-};
+}; // class VTXdigi_Allpix2
 
 class VTXdigi_Allpix2::HitInfo {
   bool m_debugFlag = false; // set to true for hits that should be logged in the debug CSV output
@@ -472,7 +472,7 @@ class VTXdigi_Allpix2::HitInfo {
 
     inline void setNSegments(int n) { m_nSegments = n; }
     inline int nSegments() const { return m_nSegments; }
-  }; // class HitInfo
+}; // class HitInfo
 
 class VTXdigi_Allpix2::PixelChargeMatrix {
   /* Stores the charge deposited in a (size_u x size_v) pixel matrix around a given origin pixel.
@@ -544,7 +544,7 @@ class VTXdigi_Allpix2::PixelChargeMatrix {
       m_pixelCharge[_FindIndex(i_u, i_v)] += charge;
     }
 
-    // functins related to noise
+    /* functions related to noise */
 
     void GenerateNoise(TRandom2& rndEngine, float sigma) {
       /* Generate noise values for each pixel in the matrix.
@@ -579,15 +579,6 @@ class VTXdigi_Allpix2::PixelChargeMatrix {
         m_pixelChargeNoise[_FindIndex(i_u, i_v)]);
     }
 
-    // float GetTotalMeasuredCharge() const {
-    //   if (m_pixelChargeNoise.size() != m_pixelCharge.size()) {
-    //     throw std::runtime_error("PixelChargeMatrix::TotalMeasuredCharge: noise has not been generated yet.");
-    //   }
-
-    //   return (
-    //     std::accumulate(m_pixelCharge.begin(), m_pixelCharge.end(), 0.f) + 
-    //     std::accumulate(m_pixelChargeNoise.begin(), m_pixelChargeNoise.end(), 0.f));
-    // }
 
     float GetTotalMeasuredCharge(float threshold) const {
       if (m_pixelChargeNoise.size() != m_pixelCharge.size())
@@ -648,7 +639,6 @@ class VTXdigi_Allpix2::PixelChargeMatrix {
       std::vector<float> newPixelCharge(newSizeU * newSizeV, 0.f);
 
       // copy old charges into new array, row by row
-      
       for (int row = 0; row < GetSize_v(); ++row) {
         std::copy(
           m_pixelCharge.begin() + row * GetSize_u(),
@@ -660,96 +650,95 @@ class VTXdigi_Allpix2::PixelChargeMatrix {
       m_pixelCharge.swap(newPixelCharge);
       std::copy(rangeNew_u, rangeNew_u + 2, m_range_u);
       std::copy(rangeNew_v, rangeNew_v + 2, m_range_v);
-    }
-  }; // class PixelChargeMatrix
+    } // _ExpandMatrix()
+}; // class PixelChargeMatrix
 
-class VTXdigi_Allpix2::ChargeSharingKernels {
+class VTXdigi_Allpix2::LookupTable {
     int m_binCountU, m_binCountV, m_binCountW;
-    int m_kernelSize;
-    /** Vector of kernels, one per in-pixel bin
-     *  Kernel-indexing is col-major (ie. i = col * size + row) */
-    std::vector<std::vector<float>> m_kernels; 
+    int m_matrixSize;
+    /** Vector of charge sharing matrices, one per in-pixel bin
+     *  Matrix-indexing is col-major (ie. i = col * size + row) */
+    std::vector<std::vector<float>> m_matrices; 
 
   public:
 
-    ChargeSharingKernels(int& binCountU, int& binCountV, int& binCountW, int& kernelSize) : m_binCountU(binCountU), m_binCountV(binCountV), m_binCountW(binCountW), m_kernelSize(kernelSize) {
-      if (kernelSize < 3 || kernelSize % 2 == 0)
-        throw std::runtime_error("ChargeSharingKernel: Kernel size must be an odd integer >= 3, but is " + std::to_string(kernelSize) + ".");
+    LookupTable(int& binCountU, int& binCountV, int& binCountW, int& matrixSize) : m_binCountU(binCountU), m_binCountV(binCountV), m_binCountW(binCountW), m_matrixSize(matrixSize) {
+      if (matrixSize < 3 || matrixSize % 2 == 0)
+        throw std::runtime_error("LookupTable: Matrix size must be an odd integer >= 3, but is " + std::to_string(matrixSize) + ".");
 
-      m_kernels.resize(binCountU * binCountV * binCountW);
-      for (auto& kernel : m_kernels) {
-        kernel.resize(kernelSize*kernelSize, 0.f);
+      m_matrices.resize(binCountU * binCountV * binCountW);
+      for (auto& matrix : m_matrices) {
+        matrix.resize(matrixSize*matrixSize, 0.f);
       }
     }
 
-    /** Set the charge sharing kernel for a specific in-pixel bin 
-     * @param weights A flat vector containing the kernel values in row-major order (ie. row-by-row) (length must be kernelSize*kernelSize)
+    /** Set the charge sharing matrix for a specific in-pixel bin 
+     * @param weights A flat vector containing the matrix weights in row-major order (ie. row-by-row) (length must be matrixSize*matrixSize)
      */
-    void SetKernel(const int j_u, const int j_v, const int j_w, const std::vector<float>& weights) {
-      if (static_cast<int>(weights.size()) != m_kernelSize*m_kernelSize)
-        throw std::runtime_error("ChargeSharingKernel::SetKernel: weights size (" + std::to_string(weights.size()) + ") does not match kernel size (" + std::to_string(m_kernelSize*m_kernelSize) + ")");
+    void SetMatrix(const int j_u, const int j_v, const int j_w, const std::vector<float>& weights) {
+      if (static_cast<int>(weights.size()) != m_matrixSize*m_matrixSize)
+        throw std::runtime_error("LookupTable::SetMatrix: weights size (" + std::to_string(weights.size()) + ") does not match matrix size (" + std::to_string(m_matrixSize*m_matrixSize) + ")");
 
-      // check if Kernel is normalized to 1
+      /* check if matrix is valid */
       float sum = 0.f;
-      for (int row = 0; row < m_kernelSize; ++row) {
-        for (int col = 0; col < m_kernelSize; ++col) {
-          sum += weights.at(row*m_kernelSize + col);
+      for (int row = 0; row < m_matrixSize; ++row) {
+        for (int col = 0; col < m_matrixSize; ++col) {
+          sum += weights.at(row*m_matrixSize + col);
         }
       }
-      if (std::abs(sum) > 1.000001f)
-        throw GaudiException("Supplied ChargeSharingKernel weight sum needs to be <= 1, but is " + std::to_string(sum) + ", .", "VTXdigi_Allpix2::ChargeSharingKernels::SetKernel()", StatusCode::FAILURE);
+      if (sum < 0 || sum > 1.f + 1.e-6f)
+        throw GaudiException("Charge sharing matrix (from LUT file) for in-pixel bin (" + std::to_string(j_u) + "," + std::to_string(j_v) + "," + std::to_string(j_w) + ") has a weight sum of " + std::to_string(sum) + ", but needs to lie in [0,1].", "VTXdigi_Allpix2::LookupTable::SetMatrix()", StatusCode::FAILURE);
+      if (std::isnan(sum))
+        throw GaudiException("Charge sharing matrix (from LUT file) for in-pixel bin (" + std::to_string(j_u) + "," + std::to_string(j_v) + "," + std::to_string(j_w) + ") contains NaN values.", "VTXdigi_Allpix2::LookupTable::SetMatrix()", StatusCode::FAILURE);
 
       const int index = _FindIndex(j_u, j_v, j_w);
-
-      for (int row = 0; row < m_kernelSize; ++row) {
-        for (int col = 0; col < m_kernelSize; ++col) {
-          // weights are given in row-major order, starting at top left. 
-          // We store kernels in col-major order, starting at bottom left (lowest bin index)
-          // m_kernels.at(index).at(col * m_kernelSize + row) = weights.at(row*m_kernelSize + col);
-          m_kernels.at(index).at(col * m_kernelSize + row) = weights.at((m_kernelSize-1-row)*m_kernelSize + col);
+      for (int row = 0; row < m_matrixSize; ++row) {
+        for (int col = 0; col < m_matrixSize; ++col) {
+          /* weights are given in row-major order, starting at top left. 
+           * We store charge sharing matrices in col-major order, starting at bottom left (lowest bin index) */
+          m_matrices.at(index).at(col * m_matrixSize + row) = weights.at((m_matrixSize-1-row)*m_matrixSize + col);
         }
       }
     }
 
-    void SetAllKernels(const std::vector<float>& weights) {
+    void SetAllMatrices(const std::vector<float>& weights) {
       for (int j_u = 0; j_u < m_binCountU; ++j_u) {
         for (int j_v = 0; j_v < m_binCountV; ++j_v) {
           for (int j_w = 0; j_w < m_binCountW; ++j_w) {
-            SetKernel(j_u, j_v, j_w, weights);
+            SetMatrix(j_u, j_v, j_w, weights);
           }
         }
       }
     }
 
-    /** Access kernel as const reference */
-    const std::vector<float>& GetKernel(int j_u, int j_v, int j_w) const {
+    /** @brief Access matrix as const reference */
+    const std::vector<float>& GetMatrix(int j_u, int j_v, int j_w) const {
       if (j_u < 0 || j_u >= m_binCountU)
-        throw std::runtime_error("ChargeSharingKernel::GetKernel: j_u (= " + std::to_string(j_u) + ") out of range");
+        throw std::runtime_error("LookupTable::GetMatrix: j_u (= " + std::to_string(j_u) + ") out of range");
       if (j_v < 0 || j_v >= m_binCountV)
-        throw std::runtime_error("ChargeSharingKernel::GetKernel: j_v (= " + std::to_string(j_v) + ") out of range");
+        throw std::runtime_error("LookupTable::GetMatrix: j_v (= " + std::to_string(j_v) + ") out of range");
       if (j_w < 0 || j_w >= m_binCountW)
-        throw std::runtime_error("ChargeSharingKernel::GetKernel: j_w (= " + std::to_string(j_w) + ") out of range");
-      return m_kernels[_FindIndex(j_u, j_v, j_w)];
+        throw std::runtime_error("LookupTable::GetMatrix: j_w (= " + std::to_string(j_w) + ") out of range");
+      return m_matrices[_FindIndex(j_u, j_v, j_w)];
     }
 
-    /** Access a specific entry of a kernel
+    /** @brief Access a specific weight in a charge sharing matrix
      * @param j_u, j_v, j_w In-pixel indices
-     * @param j_col, j_row Column and row of the kernel entry to access (go from -(kernelsize-1)/2 to +(kernelsize-1)/2)
-    */
+     * @param j_col, j_row Column and row of the matrix entry to access (go from -(matrixSize-1)/2 to +(matrixSize-1)/2) */
     float GetWeight(int j_u, int j_v, int j_w, int j_col, int j_row) const {
-      if (abs(j_col) > (m_kernelSize-1)/2)
-        throw std::runtime_error("GetKernelEntry(): j_col (=" + std::to_string(j_col) + ") out of range of kernel size.");
-      if (abs(j_row) > (m_kernelSize-1)/2)
-        throw std::runtime_error("GetKernelEntry(): j_row (=" + std::to_string(j_row) + ") out of range of kernel size.");
-      const auto& kernel = GetKernel(j_u, j_v, j_w);
-      return kernel[(j_col + (m_kernelSize-1)/2) * m_kernelSize + (j_row + (m_kernelSize-1)/2)];
+      if (abs(j_col) > (m_matrixSize-1)/2)
+        throw std::runtime_error("GetMatrixEntry(): j_col (=" + std::to_string(j_col) + ") out of range of matrix size.");
+      if (abs(j_row) > (m_matrixSize-1)/2)
+        throw std::runtime_error("GetMatrixEntry(): j_row (=" + std::to_string(j_row) + ") out of range of matrix size.");
+      const auto& matrix = GetMatrix(j_u, j_v, j_w);
+      return matrix[(j_col + (m_matrixSize-1)/2) * m_matrixSize + (j_row + (m_matrixSize-1)/2)];
     }
     float GetWeight(const VTXdigi_Allpix2::SegmentIndices& segment, int i_col, int i_row) const {
       return GetWeight(segment.j_u, segment.j_v, segment.j_w, i_col, i_row);
     }
 
     inline int GetSize() const {
-      return m_kernelSize;
+      return m_matrixSize;
     }
     inline int GetBinCountU() const {
       return m_binCountU;
@@ -765,12 +754,20 @@ class VTXdigi_Allpix2::ChargeSharingKernels {
 
     int _FindIndex (int j_u, int j_v, int j_w) const {
       if (j_u < 0 || j_u >= m_binCountU)
-        throw std::runtime_error("ChargeSharingKernel::_FindIndex: j_u (= " + std::to_string(j_u) + ") out of range");
+        throw std::runtime_error("LookupTable::_FindIndex: j_u (= " + std::to_string(j_u) + ") out of range");
       if (j_v < 0 || j_v >= m_binCountV)
-        throw std::runtime_error("ChargeSharingKernel::_FindIndex: j_v (= " + std::to_string(j_v) + ") out of range");
+        throw std::runtime_error("LookupTable::_FindIndex: j_v (= " + std::to_string(j_v) + ") out of range");
       if (j_w < 0 || j_w >= m_binCountW)
-        throw std::runtime_error("ChargeSharingKernel::_FindIndex: j_w (= " + std::to_string(j_w) + ") out of range");
+        throw std::runtime_error("LookupTable::_FindIndex: j_w (= " + std::to_string(j_w) + ") out of range");
 
       return j_u + m_binCountU * (j_v + m_binCountV * j_w); 
     }
-  }; // class ChargeSharingKernel
+}; // class LookupTable
+
+
+
+
+
+
+
+
