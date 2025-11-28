@@ -308,6 +308,7 @@ private:
     histGlobal_chargeCollectionEfficiency,
     histGlobal_pixelChargeMatrix_size_u,
     histGlobal_pixelChargeMatrix_size_v,
+    histGlobal_simHitPDG,
     histGlobalArrayLen
   }; // Global histogram indices (these hists collect from all layers). histArrayLen must be last
   std::array<
@@ -432,6 +433,7 @@ class VTXdigi_Allpix2::HitInfo {
   float m_charge;
   float m_simPathLength;
   float m_simMomentum; // magnitude of simHit momentum in GeV/c at the position of the sensor
+  int32_t m_simPdg;
 
   int m_nSegments;
 
@@ -453,6 +455,7 @@ class VTXdigi_Allpix2::HitInfo {
 
       m_charge = simHit.getEDep() * (dd4hep::GeV / dd4hep::keV) * vtxdigi_AP2.m_chargePerkeV; // in electrons
       m_simPathLength = simHit.getPathLength(); // in mm
+      m_simPdg = simHit.getParticle().getPDG(); 
 
       const edm4hep::Vector3f p = simHit.getMomentum();
       m_simMomentum = sqrt(p.x*p.x + p.y*p.y + p.z*p.z); // in GeV/c
@@ -469,6 +472,7 @@ class VTXdigi_Allpix2::HitInfo {
     inline float charge() const { return m_charge; }
     inline float simPathLength() const { return m_simPathLength; }
     inline float simMomentum() const { return m_simMomentum; }
+    inline int32_t simPdg() const { return m_simPdg; }
 
     inline void setNSegments(int n) { m_nSegments = n; }
     inline int nSegments() const { return m_nSegments; }

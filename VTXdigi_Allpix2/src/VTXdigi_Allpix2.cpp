@@ -836,6 +836,15 @@ void VTXdigi_Allpix2::InitHistograms() {
       {100, -0.5f, 99.5f}
     }
   );
+  m_histGlobal.at(histGlobal_simHitPDG).reset(
+    new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float>{this,
+      "SimHit/PDG",
+      "PDG number of the SimHit particle;PDG number",
+      {1401, -700.5f, 700.5f}
+    }
+  );
+
+
 
   m_histGlobal2d.at(histGlobal2d_pathLength_vs_G4PathLength).reset(
     new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float>{this,
@@ -1433,6 +1442,8 @@ void VTXdigi_Allpix2::FillHistograms_PerSimHit(HitInfo& hitInfo, const HitPositi
   ++(*m_histGlobal.at(histGlobal_pathLength))[hitPos.path.r()*1000]; // convert mm to um
   ++(*m_histGlobal.at(histGlobal_pathLengthGeant4))[hitInfo.simPathLength()*1000]; // convert mm to um
   ++(*m_histGlobal2d.at(histGlobal2d_pathLength_vs_G4PathLength))[{hitInfo.simPathLength()*1000 , hitPos.path.r()*1000}]; // both in um
+
+  ++(*m_histGlobal.at(histGlobal_simHitPDG))[static_cast<float>(hitInfo.simPdg())];
 
   ++(*m_hist1d.at(hitInfo.layerIndex()).at(hist1d_SimHitMomentum))[hitInfo.simMomentum()*1000]; // Convert GeV to MeV
 
