@@ -13,11 +13,14 @@ Clustering_Pixels::Clustering_Pixels(const std::string& name, ISvcLocator* svcLo
 }
 
 StatusCode Clustering_Pixels::initialize() {
-  info() << "INITIALIZING Clustering_Pixels ..." << endmsg;
+  info() << "INITIALIZING..." << endmsg;
 
   InitializeServicesAndGeometry();
 
   CheckGaudiProperties();
+
+  if (m_debugHistograms)
+    SetupDebugHistograms();
 
   verbose() << " - Initialized successfully" << endmsg;
   return StatusCode::SUCCESS;
@@ -31,7 +34,6 @@ StatusCode Clustering_Pixels::finalize() {
   verbose() << " - finalized successfully" << endmsg;
   return StatusCode::SUCCESS;
 } 
-
 
 /* -- event loop -- */
 
@@ -109,13 +111,6 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
     * (for now, i simply use the local position )*/
 
     /* place all accepted hits into struct, compute their local coordinates */
-    struct HitData {
-      float u = 0, v = 0;
-      float eDep = 0;
-      float time = 0;
-      std::shared_ptr<const edm4hep::TrackerHitPlane> hitPtr = nullptr;
-    };
-    
     std::vector<HitData> SensorHitsData;
     SensorHitsData.reserve(nHits);
 
@@ -213,7 +208,11 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
       // for (const auto& hitData : clusterHitsData) {
       //   clusterHitLink.setTo(hitData.hitPtr);
       // }
-    }
+
+      if (m_debugHistograms.value()) {
+        FillDebugHistograms_perCluster(clusterHitsData, layer);
+      }
+    } // end clustering loop
 
     verbose() << "   - Created " << nClusters << " clusters." << endmsg;
   }
@@ -239,11 +238,11 @@ void Clustering_Pixels::InitializeServicesAndGeometry() {
   if (!m_cellIDdecoder)
     throw GaudiException("Unable to retrieve the cellID decoder", "Clustering_Pixels::initializeServicesAndGeometry()", StatusCode::FAILURE);
   
-  const dd4hep::Detector* detector = m_geometryService->getDetector();
-  if (!detector)
+  m_detector = m_geometryService->getDetector();
+  if (!m_detector)
     throw GaudiException("Unable to retrieve the DD4hep detector from GeoSvc", "Clustering_Pixels::initializeServicesAndGeometry()", StatusCode::FAILURE);
   
-  const dd4hep::rec::SurfaceManager* simSurfaceManager = detector->extension<dd4hep::rec::SurfaceManager>();
+  const dd4hep::rec::SurfaceManager* simSurfaceManager = m_detector->extension<dd4hep::rec::SurfaceManager>();
   if (!simSurfaceManager)
     throw GaudiException("Unable to retrieve the SurfaceManager from the DD4hep detector", "Clustering_Pixels::initializeServicesAndGeometry()", StatusCode::FAILURE);
   
@@ -251,14 +250,31 @@ void Clustering_Pixels::InitializeServicesAndGeometry() {
   if (!m_simSurfaceMap)
     throw GaudiException("Unable to retrieve the simSurface map for subdetector " + m_subDetName.value(), "Clustering_Pixels::initializeServicesAndGeometry()", StatusCode::FAILURE);
 
-  m_volumeManager = detector->volumeManager();
+  m_volumeManager = m_detector->volumeManager();
   if (!m_volumeManager.isValid())
     throw GaudiException("Unable to retrieve the VolumeManager from the DD4hep detector", "Clustering_Pixels::initializeServicesAndGeometry()", StatusCode::FAILURE);
 
-  /* subDetector not needed as of now. Keep for future reference ~ Jona 2025-10 */
-  // const dd4hep::DetElement subDetector = detector->detector(m_subDetName.value());
-  // if (!subDetector.isValid())
-  //   throw GaudiException("Unable to retrieve the DetElement for subdetector " + m_subDetName.value(), "Clustering_Pixels::initializeServicesAndGeometry()", StatusCode::FAILURE);
+  if (m_subDetName.value() == m_undefinedString)
+    throw GaudiException("Property SubDetectorName is not set!", "Clustering_Pixels::initializeServicesAndGeometry()", StatusCode::FAILURE);
+
+  /* IDEA / Allegro: 
+   *   - subDet is child of detector, eg. Vertex 
+   *   - subDetChild is child of subDet, eg. VertexBarrel
+   *   - subDetChildChild are layers 
+   * If this is not the case, layers might be direct children of subDet: */
+
+  if (m_subDetChildName.value() != m_undefinedString) {
+    /* IDEA/Allegro setup */
+    const dd4hep::DetElement subDet = m_detector->detector(m_subDetName.value());
+    m_subDetector = subDet.child(m_subDetChildName.value());
+  }
+  else {
+    /* layers are direct children of subDet */
+    m_subDetector = m_detector->detector(m_subDetName.value());
+  }
+
+  if (!m_subDetector)
+    throw GaudiException("Unable to retrieve the subdetector DetElement " + m_subDetName.value(), "Clustering_Pixels::initializeServicesAndGeometry()", StatusCode::FAILURE);
 
   debug() << " - Successfully retrieved all necessary services and detector elements, starting to check Gaudi properties." << endmsg;
 }
@@ -269,7 +285,10 @@ void Clustering_Pixels::CheckGaudiProperties() {
 
   if (m_layersToRun.value().empty()) {
     /* TODO: Find all layers in geometry & set m_layerCount accordingly. right now this doesnt work.*/
-    throw GaudiException("Finding all layers in geometry is not implemented yet. Please specify the layers to be digitized via the LayersToDigitize property.", "VTXdigi_Allpix2::setupSensorParameters()", StatusCode::FAILURE);
+    throw GaudiException("Finding all layers in geometry is not implemented yet. Please specify the layers to be digitized via the LayersToDigitize property.", "Clustering_Pixels::setupSensorParameters()", StatusCode::FAILURE);
+
+    /* Collect layers in this subdetector from geometry */
+
 
     m_layerN = 0; // placeholder, needs to be set properly when finding all layers in geometry is implemented
   }
@@ -286,6 +305,30 @@ void Clustering_Pixels::CheckGaudiProperties() {
 }
 
 void Clustering_Pixels::SetupDebugHistograms() {
+  
+  /* -- per-layer histograms -- */
+  for (int layer : m_layersToRun.value()) {
+    std::array< std::unique_ptr< Gaudi::Accumulators::StaticHistogram<1,Gaudi::Accumulators::atomicity::full,float>>, hist1dArrayLen>  hist1d;
+
+    hist1d.at(hist1d_clusterSize).reset(
+      new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Layer" + std::to_string(layer) + "/clusterSize",
+        "Cluster size - Layer " + std::to_string(layer) + ";Pixels per cluster;Entries",
+        {50, -0.5f, 49.5f}
+      }
+    );
+
+    hist1d.at(hist1d_clusterCharge).reset(
+      new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Layer" + std::to_string(layer) + "/clusterCharge",
+        "Cluster charge - Layer " + std::to_string(layer) + ";Total cluster charge [e];Entries",
+        {1000, 0.f, 50.f*500.f} // for 50 mu sensor thickness
+      }
+    );
+
+
+    m_hist1d.emplace(layer, std::move(hist1d));
+  }
 }
 
 void Clustering_Pixels::PrintCountersSummary() const {
@@ -307,7 +350,7 @@ void Clustering_Pixels::PrintCountersSummary() const {
 
 /* -- Core algorithm functions -- */
 bool Clustering_Pixels::CheckInitialSetup(const edm4hep::TrackerHitPlaneCollection& hits, const edm4hep::EventHeaderCollection& headers) const {
-  info() << "PROCESSING event. run " << headers.at(0).getRunNumber() << ", event " << headers.at(0).getEventNumber() << ". Found " << hits.size() << " hits." << endmsg;
+  info() << "PROCESSING event (run " << headers.at(0).getRunNumber() << ", event " << headers.at(0).getEventNumber() << ", found " << hits.size() << " hits" << endmsg;
   ++m_counter_eventsRead;
 
   // early sanity checks to avoid segfaults from null pointers
@@ -403,6 +446,25 @@ edm4hep::Vector3d Clustering_Pixels::ConvertVector(dd4hep::rec::Vector3D vec) co
   return edm4hep::Vector3d(vec.x(), vec.y(), vec.z());
 }
 
+void Clustering_Pixels::FillDebugHistograms_perCluster(const std::vector<Clustering_Pixels::HitData>& clusterHits, const int layer) const {
+  verbose() << "   - Filling debug histograms for cluster in layer " << layer << " with " << clusterHits.size() << " hits." << endmsg;
+
+  /* ClusterSize */
+  const int clusterSize = clusterHits.size();
+  ++(*m_hist1d.at(layer).at(hist1d_clusterSize))[static_cast<float>(clusterSize)]; 
+
+  /* ClusterCharge */
+  float clusterE = 0.0f; // in keV
+  for (const auto& hit : clusterHits) {
+    clusterE += hit.eDep;
+  }
+  const float clusterCharge = clusterE * m_chargePerkeV; // in electrons
+  verbose() << "      - Cluster eDep " << clusterE << " keV, charge " << clusterCharge << " e." << endmsg;
+  ++(*m_hist1d.at(layer).at(hist1d_clusterCharge))[clusterCharge];
+
+  /*  */
+}
+
 /* -- Other Helper functions -- */
 
 int Clustering_Pixels::ComputeBinIndex(float x, float binX0, float binWidth, int binN) const {
@@ -422,7 +484,7 @@ int Clustering_Pixels::ComputeBinIndex(float x, float binX0, float binWidth, int
   return static_cast<int>(relativePos);
 } // computeBinIndex()
 
-// std::tuple<int, int> VTXdigi_Allpix2::computePixelIndices(const edm4hep::TrackerHitPlane& hit) const {
+// std::tuple<int, int> Clustering_Pixels::computePixelIndices(const edm4hep::TrackerHitPlane& hit) const {
   
 //   int i_u = computeBinIndex(
 //     segmentPos.x(),

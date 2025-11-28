@@ -58,6 +58,15 @@ struct Clustering_Pixels final
 
 private:
 
+  /* -- Classes -- */
+
+  struct HitData {
+    float u = 0, v = 0;
+    float eDep = 0;
+    float time = 0;
+    std::shared_ptr<const edm4hep::TrackerHitPlane> hitPtr = nullptr;
+  };
+
   /* -- Initialization / finalization functions -- */
 
   void InitializeServicesAndGeometry();
@@ -70,7 +79,7 @@ private:
   bool CheckInitialSetup(const edm4hep::TrackerHitPlaneCollection& hits, const edm4hep::EventHeaderCollection& headers) const;
 
 
-
+  void FillDebugHistograms_perCluster(const std::vector<Clustering_Pixels::HitData>& clusterHits, const int layer) const;
 
 
   /* -- Helper functions -- */
@@ -101,20 +110,22 @@ private:
   std::unique_ptr<dd4hep::DDSegmentation::BitFieldCoder> m_cellIDdecoder; // Decoder for the cellID
 
   dd4hep::VolumeManager m_volumeManager; // volume manager to get the physical cell sensitive volume
+  const dd4hep::Detector* m_detector = nullptr; // pointer to the DD4hep detector
+  dd4hep::DetElement m_subDetector; // subdetector DetElement. contains layers as children
   SmartIF<IUniqueIDGenSvc> m_uidSvc;
 
   const dd4hep::rec::SurfaceMap* m_simSurfaceMap;
 
   /* -- Constants -- */
 
-  const float m_numericLimit_float = 0.00001f; // limit for floating point comparisons
-  const double m_numericLimit_double = 0.000000001; // limit for floating point
   const float m_chargePerkeV = 273.97f; // number of electron-hole pairs created per keV of deposited energy in silicon. eh-pair ~ 3.65 eV
 
   /* -- Detector & sensor parameters -- */
 
   int m_layerN = -1; // number of layers to digitize. -1 means all layers
-  float m_neighborRadiusHelper[3];
+
+  float m_neighborRadiusHelper[3]; // filled in initialize(). Used for calculating distannces between hits
+
 
   /* -- Counters -- */
 
@@ -133,6 +144,8 @@ private:
   const std::string m_undefinedString = "UNDEFINED";
 
   Gaudi::Property<std::string> m_subDetName{this, "SubDetectorName", m_undefinedString, "Name of the subdetector"};
+  Gaudi::Property<std::string> m_subDetChildName{this, "SubDetectorChildName", m_undefinedString, "Name of the subdetector child (eg. \"VertexBarrel\"), if applicable. If undefined, the subdetector itself is assumed to contain layers as children."};
+
   Gaudi::Property<std::string> m_geometryServiceName{this, "GeoSvcName", "GeoSvc", "The name of the GeoSvc instance"}; // what is this for?
   Gaudi::Property<std::string> m_encodingStringVariable{this, "EncodingStringParameterName", "GlobalTrackerReadoutID", "The name of the DD4hep constant that contains the Encoding string for tracking detectors"};
 
@@ -146,6 +159,25 @@ private:
   Gaudi::Property<float> m_neighborRadius_v{this, "NeighborRadius_v", 37.5, "Radius (in um) in which to look for neighbors of a pixel, in v direction"};
 
   /* Debugging */
-  Gaudi::Property<bool> m_debugHistograms{this, "DebugHistograms", false, "Whether to create and fill debug histograms. Not recommended for multithreading, might lead to crashes."};
+  Gaudi::Property<bool> m_debugHistograms{this, "DebugHistograms", false, "Whether to create and fill debug histograms. Not recommended for multithreading, might lead to crashes. Requires RootHistSvc."};
+
+  enum {
+    hist1d_clusterSize,
+    hist1d_clusterCharge,
+    hist1dArrayLen
+  }; // 1D histogram indices
+  mutable std::unordered_map<
+    int,
+    std::array<
+      std::unique_ptr<
+        Gaudi::Accumulators::StaticHistogram<
+          1, 
+          Gaudi::Accumulators::atomicity::full,
+          float
+        >
+      >,
+      hist1dArrayLen
+    >
+  > m_hist1d;
 };
 
