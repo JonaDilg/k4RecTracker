@@ -61,6 +61,16 @@ struct VTXdigi_Modular final
 private: 
 
   friend class IChargeCollector;
+
+  /* ---- Initialization & finalization functions ---- */
+
+  void InitServicesAndGeometry();
+  void InitLayersAndSensors();
+  void InitHistograms();
+
+  /* ---- Core algorithm functions ---- */
+
+
   
   /* -- Properties -- */
 
@@ -69,8 +79,12 @@ private:
   Gaudi::Property<std::string> m_subDetName{this, "SubDetectorName", m_undefinedString, "Name of the subdetector (eg. \"Vertex\")"};
   Gaudi::Property<std::string> m_subDetChildName{this, "SubDetectorChildName", m_undefinedString, "Name of the subdetector child (eg. \"VertexBarrel\"), if applicable. If undefined, the subdetector itself is assumed to contain layers as children."};
 
-  Gaudi::Property<std::string> m_geometryServiceName{this, "GeoSvcName", "GeoSvc", "The name of the GeoSvc instance"}; // what is this for?
+  Gaudi::Property<std::string> m_geoServiceName{this, "GeoSvcName", "GeoSvc", "The name of the GeoSvc instance"};
   Gaudi::Property<std::string> m_encodingStringVariable{this, "EncodingStringParameterName", "GlobalTrackerReadoutID", "The name of the DD4hep constant that contains the Encoding string for tracking detectors"};
+
+  /* -- Properties mainlyrelated to the main event loop -- */
+
+  Gaudi::Property<std::vector<int>> m_layersToDigitize{this, "LayersToDigitize", {}, "Which layers to digitize (0-indexed). If empty, all layers are digitized."};
 
   /* -- Properties and members related to the various charge collection algorithms-- */
 
@@ -78,15 +92,13 @@ private:
   
   /* -- Services, geometry variables -- */
   
+  SmartIF<IUniqueIDGenSvc> m_uidService;
   SmartIF<IGeoSvc> m_geoService;
-  std::unique_ptr<dd4hep::DDSegmentation::BitFieldCoder> m_cellIDdecoder;
-
-  dd4hep::VolumeManager m_volumeManager; // volume manager to get the physical cell sensitive volume
+  std::unique_ptr<dd4hep::DDSegmentation::BitFieldCoder> m_cellIdDecoder;
   const dd4hep::Detector* m_detector = nullptr;
+  const dd4hep::rec::SurfaceMap* m_surfaceMap;
+  dd4hep::VolumeManager m_volumeManager; // volume manager to get the physical cell sensitive volume
   dd4hep::DetElement m_subDetector; // subdetector DetElement. contains layers as children
-  SmartIF<IUniqueIDGenSvc> m_uidSvc;
-  
-  const dd4hep::rec::SurfaceMap* m_SurfaceMap;
   
   /* -- Constants -- */
   
@@ -94,7 +106,14 @@ private:
   
   /* -- Member variables -- */
 
-  std::unique_ptr<VTXdigi_details::IChargeCollector> m_chargeCollector;
+  std::unique_ptr<VTXdigi_details::IChargeCollector> m_chargeCollector = nullptr;
+
+  int m_layerCount = 0; 
+  std::array<int, 2> m_pixelCount = {0, 0}; 
+  std::array<float, 2> m_pixelPitch = {0.0f, 0.0f};
+  float m_sensorThickness = 0.0f;
+  std::array<float, 2> m_sensorLength = {0.0f, 0.0f};
+
 }; // class VTXdigi_Modular
 
 
