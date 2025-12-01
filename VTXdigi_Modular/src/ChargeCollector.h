@@ -1,22 +1,19 @@
 #pragma once
 
 #include <memory>
+#include "../include/VTXdigi_Modular.h"
 
 namespace VTXdigi_details {
 
+using ::VTXdigi_Modular;
+
 /* -- Charge collector algorithms -- */
-
-class IChargeCollector {
-public:
-  virtual ~IChargeCollector() = default;
-
-  virtual void Collect() const = 0;
-};
 
 class ChargeCollector_LUT : public IChargeCollector {
 
-public:
-  void Collect() const override;
+  public:
+    explicit ChargeCollector_LUT(const VTXdigi_Modular& digitizer);
+    void Collect() const override;
 };
 
 class ChargeCollector_Drift : public IChargeCollector {
@@ -25,7 +22,9 @@ public:
   void Collect() const override;
 };
 
-std::unique_ptr<IChargeCollector> CreateChargeCollector(const std::string& algorithm);
+/** @brief Holds position & information about path through the sensor */
+struct Path;
 
+Path ComputePath(const dd4hep::rec::ISurface& surface, const edm4hep::SimTrackerHit& simHit);
 
 } // namespace VTXdigi_details

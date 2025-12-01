@@ -37,7 +37,9 @@ VTXdigi_Modular::VTXdigi_Modular(const std::string& name, ISvcLocator* svcLoc)
 StatusCode VTXdigi_Modular::initialize() {
   info() << "INITIALIZING VTXdigi_Modular..." << endmsg;
 
-  m_chargeCollector = VTXdigi_details::CreateChargeCollector(m_chargeCollectionMethod);
+
+  /* This needs to come in after the properties, geometry and services have all been initialized */
+  m_chargeCollector = VTXdigi_details::CreateChargeCollector(*this, m_chargeCollectionMethod);
 
   info() << " - Initialized successfully." << endmsg;
   return StatusCode::SUCCESS;
@@ -62,6 +64,8 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
   auto digiHits = edm4hep::TrackerHitPlaneCollection();
   auto digiHitsLinks = edm4hep::TrackerHitSimTrackerHitLinkCollection();
   
+  m_chargeCollector->Collect();
+
   return std::make_tuple(std::move(digiHits), std::move(digiHitsLinks));
 } // operator()
 
