@@ -5,6 +5,9 @@
 #include "Gaudi/Accumulators/RootHistogram.h" // added by Jona
 #include "Gaudi/Accumulators/Histogram.h" // added by Jona
 
+#include "podio/LinkCollection.h"
+#include "podio/LinkNavigator.h"
+
 #include "edm4hep/SimTrackerHitCollection.h"
 #include "edm4hep/EventHeaderCollection.h" // added by Jona
 #include "edm4hep/TrackerHitPlaneCollection.h" // added by Jona
@@ -71,7 +74,7 @@ private:
 
   void InitializeServicesAndGeometry();
   void CheckGaudiProperties();
-  void SetupDebugHistograms();
+  void InitHistograms();
   void PrintCountersSummary() const;
 
   /* -- Core algorithm functions -- */
@@ -79,7 +82,7 @@ private:
   bool CheckInitialSetup(const edm4hep::TrackerHitPlaneCollection& hits, const edm4hep::EventHeaderCollection& headers) const;
 
 
-  void FillDebugHistograms_perCluster(const std::vector<Clustering_Pixels::HitData>& clusterHits, const int layer) const;
+  void FillHistograms_perCluster(const edm4hep::MutableTrackerHitPlane& cluster, const std::vector<Clustering_Pixels::HitData>& clusterHitsData,  std::vector<edm4hep::SimTrackerHit> clusterSimHits, const dd4hep::DDSegmentation::CellID& cellID, const int layer) const;
 
 
   /* -- Helper functions -- */
@@ -164,8 +167,13 @@ private:
   enum {
     hist1d_clusterSize,
     hist1d_clusterCharge,
-    hist1dArrayLen
-  }; // 1D histogram indices
+    hist1d_simHitsPerCluster,
+    hist1d_residual,
+    hist1d_residual_z,
+    hist1d_residual_u,
+    hist1d_residual_v,
+    hist1d_residual_w,
+    hist1dArrayLen }; // 1D histogram indices
   mutable std::unordered_map<
     int,
     std::array<
@@ -179,5 +187,48 @@ private:
       hist1dArrayLen
     >
   > m_hist1d;
+
+  enum {
+    hist2d_clusterSize_vs_clusterCharge,
+    hist2d_residual_local,
+    hist2dArrayLen };
+  mutable std::unordered_map<
+    int,
+    std::array<
+      std::unique_ptr<
+        Gaudi::Accumulators::StaticHistogram<
+          2, 
+          Gaudi::Accumulators::atomicity::full,
+          float
+        >
+      >,
+      hist2dArrayLen
+    >
+  > m_hist2d;
+
+  enum{
+    histProfile1d_clusterSize_vs_hit_z,
+    histProfile1d_clusterSize_vs_hit_cosTheta,
+    histProfile1d_clusterSize_vs_module_z,
+    histProfile1d_clusterSize_vs_module_ID,
+    histProfile1d_residual_vs_hit_z,
+    histProfile1d_residual_u_vs_hit_z,
+    histProfile1d_residual_v_vs_hit_z,
+    histProfile1d_residual_vs_hit_cosTheta,
+    histProfile1d_residual_vs_clusterSize,
+    histProfile1dArrayLen };
+  mutable std::unordered_map<
+    int,
+    std::array<
+      std::unique_ptr<
+        Gaudi::Accumulators::StaticProfileHistogram<
+          1, 
+          Gaudi::Accumulators::atomicity::full,
+          float
+        >
+      >,
+      histProfile1dArrayLen
+    >
+  > m_histProfile1d;
 };
 

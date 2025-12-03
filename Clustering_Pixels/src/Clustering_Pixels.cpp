@@ -20,7 +20,7 @@ StatusCode Clustering_Pixels::initialize() {
   CheckGaudiProperties();
 
   if (m_debugHistograms)
-    SetupDebugHistograms();
+    InitHistograms();
 
   verbose() << " - Initialized successfully" << endmsg;
   return StatusCode::SUCCESS;
@@ -45,8 +45,11 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
     return std::make_tuple(edm4hep::TrackerHitPlaneCollection(), edm4hep::TrackerHitSimTrackerHitLinkCollection());
 
   /* output collections */
-  auto clusterHits = edm4hep::TrackerHitPlaneCollection();
+  auto clusters = edm4hep::TrackerHitPlaneCollection();
   auto clusterHitLinks = edm4hep::TrackerHitSimTrackerHitLinkCollection();
+
+  /* link navigator (to find which hits are linked to which sim hits) */
+  const auto hitLinkNavigator = podio::LinkNavigator(hitLinks);
 
   /* sort hits to their respective sensor
    * Note: do NOT copy the objects behind the pointers, this messes up their associations under the hood of PODIO!
@@ -65,7 +68,6 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
     * this is because we only want to cluster hits on the same sensor
     * TODO what I am doing here is only a temporary solution, needs to be replaced with a proper way to get a unique identifier for each sensor
     * (this works for IDEA with ARCADIA and ATLASpix layers, because ATLASpix has 4 and ARCADIA has 1 sensor per module)*/
-    const int layer = m_cellIDdecoder->get(hit.getCellID(), "layer");
     const int module = m_cellIDdecoder->get(hit.getCellID(), "module");
     const int sensor = m_cellIDdecoder->get(hit.getCellID(), "sensor");
     const int sensorUid = module*4 + sensor; // unique identifier for each sensor
@@ -79,7 +81,7 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
   if (hitsSensorMap.empty()) {
     debug() << " - No hits passed the cuts, returning empty output collections." << endmsg;
     ++m_counter_eventsRejected_noHitsOnSpecifiedLayers;
-    return std::make_tuple(std::move(clusterHits), std::move(clusterHitLinks));
+    return std::make_tuple(std::move(clusters), std::move(clusterHitLinks));
   }
   verbose() << " - Sorted " << hits.size() << " hits to " << hitsSensorMap.size() << " sensors. Looping over sensors:" << endmsg;
 
@@ -148,9 +150,8 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
       bool addedNeighbor = true;
       while (addedNeighbor) {
         addedNeighbor = false;
-
         /* loop over hits and see if any are closer than r_u^2+r_v^2
-         * this is a brute-force algorithm. From my naive understanding, our low occupancy makes this a non-issue. ~ Jona, 2025-11*/
+         * this is a brute-force algorithm. My naive guess is that our low occupancy makes this a non-issue. ~ Jona, 2025-11*/
         for (auto iterator = SensorHitsData.begin(); iterator != SensorHitsData.end(); ) {
           const float du = iterator->u - clusterHitsData.back().u; // local u coordinate of last added hit
           const float dv = iterator->v - clusterHitsData.back().v; // local v coordinate of last added hit
@@ -169,48 +170,82 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
         }
       }
 
-      /* get cluster position and timestamp from clusterHitsData */
-
-      float clusterPos_u = 0, clusterPos_v = 0, clusterEDep = 0, clusterTime = 0;
+      /* compute cluster position and timestamp from clusterHitsData */
+      float clusterPos[2] = {0.,0.}, clusterEDep = 0, clusterTime = 0;
       for (const auto& hitData : clusterHitsData) {
-        clusterPos_u += hitData.u * hitData.eDep;
-        clusterPos_v += hitData.v * hitData.eDep;
+        clusterPos[0] += hitData.u * hitData.eDep;
+        clusterPos[1] += hitData.v * hitData.eDep;
         clusterEDep += hitData.eDep;
         /* TODO: weighed average is a crude estimate for cluster timestamp. Think of something better. */
         clusterTime += hitData.time * hitData.eDep; 
       }
-      clusterPos_u /= clusterEDep;
-      clusterPos_v /= clusterEDep;
+      clusterPos[0] /= clusterEDep;
+      clusterPos[1] /= clusterEDep;
       clusterTime /= clusterEDep;
 
+      /* collect simHits that are linked to any hit in this cluster. (see
+      * https://github.com/AIDASoft/podio/blob/master/doc/links.md 
+      * https://github.com/AIDASoft/podio/blob/1a678f5f46273e3e5a2ea3ff16eb8d41990e7c70/include/podio/LinkNavigator.h#L87) 
+      * Problem: I am now copying the simHits, and creating hitLinks from the clusterHits to these copied simHits.
+      * I am not sure if this works correctly, but I can imagine it does. 
+      * There seems to be no better way to do this (ie. I cannot find one) ~ Jona 2025-12 */
+      std::vector<edm4hep::SimTrackerHit> clusterSimHits;
+
+      for (const auto& hitData : clusterHitsData) {
+        std::vector<
+          podio::detail::links::WeightedObject<edm4hep::SimTrackerHit>,std::allocator<podio::detail::links::WeightedObject<edm4hep::SimTrackerHit>>
+        > linkedWs = hitLinkNavigator.getLinked(*hitData.hitPtr); // full type just so I know what is going on ~ Jona 2025-12
+
+        for (const auto& linkedW : linkedWs) {
+          const edm4hep::SimTrackerHit& linkedSimHit = linkedW.o; // might be .object depending on podio version (i think?) ~ Jona 2025-12
+
+          /* check if we already have this simHit in clusterSimHits, if not, add it. */
+          bool isDuplicate = false;
+          for (const auto& simHit : clusterSimHits) {
+            if (simHit == linkedSimHit) {
+              isDuplicate = true;
+              break;
+            }
+          }
+          if (!isDuplicate) {
+            clusterSimHits.push_back(linkedSimHit);
+          }
+        }
+      }
+      const int nLinkedSimHits = clusterSimHits.size();
+      verbose() << "      - Cluster has " << nLinkedSimHits << " unique linked simHits." << endmsg;
+
+
+      
       /* create cluster hit */
 
-      auto clusterHit = clusterHits.create();
-      clusterHit.setCellID(cellID);
-      dd4hep::rec::Vector3D clusterLocalPos(clusterPos_u, clusterPos_v, 0.f);
+      auto cluster = clusters.create();
+      cluster.setCellID(cellID);
+      dd4hep::rec::Vector3D clusterLocalPos(clusterPos[0], clusterPos[1], 0.f);
       dd4hep::rec::Vector3D clusterGlobalPos = TransformLocalToGlobal(clusterLocalPos, cellID);
-      clusterHit.setPosition(ConvertVector(clusterGlobalPos));
-      clusterHit.setEDep(clusterEDep);
-      clusterHit.setTime(clusterTime);
-
-
+      cluster.setPosition(ConvertVector(clusterGlobalPos));
+      cluster.setEDep(clusterEDep);
+      cluster.setTime(clusterTime);
 
       /* get pointers to all simHits that are linked to by digiHits in the cluster */
+      
+
+
 
       /* TODO: loop over hits in this cluster, find all linked simHits */
 
 
-      // auto clusterHitLink = clusterHitLinks.create();
-      // clusterHitLink.setFrom(clusterHit);
+      // auto clusterLink = clusterLinks.create();
+      // clusterLink.setFrom(cluster);
 
 
       
       // for (const auto& hitData : clusterHitsData) {
-      //   clusterHitLink.setTo(hitData.hitPtr);
+      //   clusterLink.setTo(hitData.hitPtr);
       // }
 
       if (m_debugHistograms.value()) {
-        FillDebugHistograms_perCluster(clusterHitsData, layer);
+        FillHistograms_perCluster(cluster, clusterHitsData, clusterSimHits, cellID, layer);
       }
     } // end clustering loop
 
@@ -218,7 +253,7 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
   }
 
   debug() << "FINISHED event." << endmsg;
-  return std::make_tuple(std::move(clusterHits), std::move(clusterHitLinks));
+  return std::make_tuple(std::move(clusters), std::move(clusterHitLinks));
 } // operator()
 
 
@@ -304,7 +339,7 @@ void Clustering_Pixels::CheckGaudiProperties() {
   m_neighborRadiusHelper[2] = m_neighborRadiusHelper[0] * m_neighborRadiusHelper[1] + 0.001f; // add small numeric limit to avoid floating point issues. We can simply add a small epsilon, because we know the order of magnitude of the distances we are working with.
 }
 
-void Clustering_Pixels::SetupDebugHistograms() {
+void Clustering_Pixels::InitHistograms() {
   
   /* -- per-layer histograms -- */
   for (int layer : m_layersToRun.value()) {
@@ -326,9 +361,157 @@ void Clustering_Pixels::SetupDebugHistograms() {
       }
     );
 
+    hist1d.at(hist1d_simHitsPerCluster).reset(
+      new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Layer" + std::to_string(layer) + "/simHitsPerCluster",
+        "Number of individual particles that contributed to this cluster - Layer " + std::to_string(layer) + ";SimHits per cluster;Entries",
+        {30, -0.5f, 29.5f}
+      }
+    );
+
+    hist1d.at(hist1d_residual).reset(
+      new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Layer" + std::to_string(layer) + "/residual",
+        "Total residual - Layer " + std::to_string(layer) + ";Residual [um];Entries",
+        {2000, -1000.f, 1000.f}
+      }
+    );
+    hist1d.at(hist1d_residual_z).reset(
+      new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Layer" + std::to_string(layer) + "/residual_Global_z",
+        "Residual in z (global) - Layer " + std::to_string(layer) + ";Residual z [um];Entries",
+        {2000, -1000.f, 1000.f}
+      }
+    );
+    hist1d.at(hist1d_residual_u).reset(
+      new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Layer" + std::to_string(layer) + "/residual_Local_u",
+        "Residual in u (local) - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
+        {2000, -1000.f, 1000.f}
+      }
+    );
+    hist1d.at(hist1d_residual_v).reset(
+      new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Layer" + std::to_string(layer) + "/residual_Local_v",
+        "Residual in v (local) - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
+        {2000, -1000.f, 1000.f}
+      }
+    );
+    hist1d.at(hist1d_residual_w).reset(
+      new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Layer" + std::to_string(layer) + "/residual_Local_w",
+        "Residual in w (local) - Layer " + std::to_string(layer) + ";Residual w [um];Entries",
+        {2000, -1000.f, 1000.f}
+      }
+    );
+
+
 
     m_hist1d.emplace(layer, std::move(hist1d));
+
+    /* -- 2D histograms -- */
+
+    std::array< std::unique_ptr< Gaudi::Accumulators::StaticHistogram<2,Gaudi::Accumulators::atomicity::full,float>>, hist2dArrayLen>  hist2d;
+
+    hist2d.at(hist2d_clusterSize_vs_clusterCharge).reset(
+      new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Layer" + std::to_string(layer) + "/clusterSize_vs_clusterCharge",
+        "Cluster size vs. cluster charge - Layer " + std::to_string(layer) + ";Total cluster charge [e];Pixels per cluster",
+        {1000, 0.f, 50.f*500.f},
+        {50, -0.5f, 49.5f} // for 50 mu sensor thickness
+      }
+    );
+
+    hist2d.at(hist2d_residual_local).reset(
+      new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Layer" + std::to_string(layer) + "/residual_2D_local",
+        "Residual in local (sensor) coordinates - Layer " + std::to_string(layer) + ";u [um];v [um]",
+        {2000, -1000.f, 1000.f},
+        {2000, -1000.f, 1000.f}
+      }
+    );
+
+
+
+    
+    m_hist2d.emplace(layer, std::move(hist2d));
+
+    /* -- 1D Profile histograms -- */
+
+    std::array< std::unique_ptr< Gaudi::Accumulators::StaticProfileHistogram<1,Gaudi::Accumulators::atomicity::full,float>>, histProfile1dArrayLen>  histProfile1d;
+
+    histProfile1d.at(histProfile1d_clusterSize_vs_hit_z).reset(
+      new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Layer" + std::to_string(layer) + "/clusterSize_vs_hit_z",
+        "Cluster size - Layer " + std::to_string(layer) + ";SimHit global z position [mm];Pixels per cluster",
+        {2000, -500.f, 500.f}
+      }
+    );
+    histProfile1d.at(histProfile1d_clusterSize_vs_hit_cosTheta).reset(
+      new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Layer" + std::to_string(layer) + "/clusterSize_vs_hit_cosTheta",
+        "Cluster size - Layer " + std::to_string(layer) + ";cosTheta of simHit position;Pixels per cluster",
+        {200, 0.f, 1.f}
+      }
+    );
+
+    histProfile1d.at(histProfile1d_clusterSize_vs_module_z).reset(
+      new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Layer" + std::to_string(layer) + "/clusterSize_vs_module_z",
+        "Cluster size - Layer " + std::to_string(layer) + ";module global z position [mm];Pixels per cluster",
+        {2000, -500.f, 500.f}
+      }
+    );
+    histProfile1d.at(histProfile1d_clusterSize_vs_module_ID).reset(
+      new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Layer" + std::to_string(layer) + "/clusterSize_vs_module_ID",
+        "Cluster size - Layer " + std::to_string(layer) + ";Module ID;Pixels per cluster",
+        {2000, -0.5f, 1999.5f}
+      }
+    );
+
+    histProfile1d.at(histProfile1d_residual_vs_hit_z).reset(
+      new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Layer" + std::to_string(layer) + "/residual_vs_hit_z",
+        "Total residual - Layer " + std::to_string(layer) + ";SimHit global z position [mm];Residual [um]",
+        {2000, -500.f, 500.f}
+      }
+    );
+    histProfile1d.at(histProfile1d_residual_u_vs_hit_z).reset(
+      new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Layer" + std::to_string(layer) + "/residual_u_vs_hit_z",
+        "Local residual in u - Layer " + std::to_string(layer) + ";SimHit global z position [mm];Residual in u (sensor frame) [um]",
+        {2000, -500.f, 500.f}
+      }
+    );
+    histProfile1d.at(histProfile1d_residual_v_vs_hit_z).reset(
+      new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Layer" + std::to_string(layer) + "/residual_v_vs_hit_z",
+        "Local residual in v - Layer " + std::to_string(layer) + ";SimHit global z position [mm];Residual in v (sensor frame) [um]",
+        {2000, -500.f, 500.f}
+      }
+    );
+    histProfile1d.at(histProfile1d_residual_vs_hit_cosTheta).reset(
+      new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Layer" + std::to_string(layer) + "/residual_vs_hit_cosTheta",
+        "Total residual - Layer " + std::to_string(layer) + ";SimHit global cosTheta;Residual [um]",
+        {200, 0.f, 1.f}
+      }
+    );
+    histProfile1d.at(histProfile1d_residual_vs_clusterSize).reset(
+      new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Layer" + std::to_string(layer) + "/residual_vs_clusterSize",
+        "Total residual - Layer " + std::to_string(layer) + ";Cluster size [pixels];Residual [um]",
+        {50, -0.5f, 49.5f}
+      }
+    );
+
+
+
+    m_histProfile1d.emplace(layer, std::move(histProfile1d));
   }
+
+
 }
 
 void Clustering_Pixels::PrintCountersSummary() const {
@@ -446,23 +629,64 @@ edm4hep::Vector3d Clustering_Pixels::ConvertVector(dd4hep::rec::Vector3D vec) co
   return edm4hep::Vector3d(vec.x(), vec.y(), vec.z());
 }
 
-void Clustering_Pixels::FillDebugHistograms_perCluster(const std::vector<Clustering_Pixels::HitData>& clusterHits, const int layer) const {
-  verbose() << "   - Filling debug histograms for cluster in layer " << layer << " with " << clusterHits.size() << " hits." << endmsg;
+void Clustering_Pixels::FillHistograms_perCluster(const edm4hep::MutableTrackerHitPlane& cluster, const std::vector<Clustering_Pixels::HitData>& clusterHitsData,  std::vector<edm4hep::SimTrackerHit> clusterSimHits, const dd4hep::DDSegmentation::CellID& cellID, const int layer) const {
+  verbose() << "   - Filling debug histograms for cluster in layer " << layer << " with " << clusterHitsData.size() << " hits." << endmsg;
+
+  const dd4hep::rec::Vector3D clusterGlobalPos = ConvertVector(cluster.getPosition()); // re-computing them here. This is slightly slower than passing them, but cleaner.
+  const dd4hep::rec::Vector3D clusterLocalPos = TransformGlobalToLocal(clusterGlobalPos, cellID);
+
+  ++(*m_hist1d.at(layer).at(hist1d_simHitsPerCluster))[clusterSimHits.size()]; 
 
   /* ClusterSize */
-  const int clusterSize = clusterHits.size();
+  const int clusterSize = clusterHitsData.size();
   ++(*m_hist1d.at(layer).at(hist1d_clusterSize))[static_cast<float>(clusterSize)]; 
 
   /* ClusterCharge */
   float clusterE = 0.0f; // in keV
-  for (const auto& hit : clusterHits) {
+  for (const auto& hit : clusterHitsData) {
     clusterE += hit.eDep;
   }
   const float clusterCharge = clusterE * m_chargePerkeV; // in electrons
   verbose() << "      - Cluster eDep " << clusterE << " keV, charge " << clusterCharge << " e." << endmsg;
   ++(*m_hist1d.at(layer).at(hist1d_clusterCharge))[clusterCharge];
+  ++(*m_hist2d.at(layer).at(hist2d_clusterSize_vs_clusterCharge))[{clusterCharge, clusterSize}];
 
-  /*  */
+  /* plot sim-hit dependent variables once for every simHit that contributed to the cluster */
+  for (const auto& simHit : clusterSimHits) {
+    const dd4hep::rec::Vector3D simHitGlobalPos = ConvertVector(simHit.getPosition());
+    const dd4hep::rec::Vector3D simHitLocalPos = TransformGlobalToLocal(simHitGlobalPos, cellID);
+
+    const float simHit_z = simHitGlobalPos.z(); // in mm
+    (*m_histProfile1d.at(layer).at(histProfile1d_clusterSize_vs_hit_z))[simHit_z] += clusterSize;
+
+    const float simHit_cosTheta = std::abs(simHitGlobalPos.z() / simHitGlobalPos.r());
+    (*m_histProfile1d.at(layer).at(histProfile1d_clusterSize_vs_hit_cosTheta))[simHit_cosTheta] += clusterSize;
+
+    /* Residual = cluster pos. - truth pos. */
+    const dd4hep::rec::Vector3D residualLocal = clusterLocalPos - simHitLocalPos;
+    const dd4hep::rec::Vector3D residualGlobal = clusterGlobalPos - simHitGlobalPos;
+
+    ++(*m_hist1d.at(layer).at(hist1d_residual))[residualGlobal.r()*1000.f]; // convert to um
+    ++(*m_hist1d.at(layer).at(hist1d_residual_z))[residualGlobal.z()*1000.f];
+    ++(*m_hist1d.at(layer).at(hist1d_residual_u))[residualLocal.x()*1000.f];
+    ++(*m_hist1d.at(layer).at(hist1d_residual_v))[residualLocal.y()*1000.f];
+    ++(*m_hist1d.at(layer).at(hist1d_residual_w))[residualLocal.z()*1000.f];
+
+    ++(*m_hist2d.at(layer).at(hist2d_residual_local))[{residualLocal.x()*1000.f, residualLocal.y()*1000.f}];
+
+    (*m_histProfile1d.at(layer).at(histProfile1d_residual_vs_hit_z))[simHit_z] += residualGlobal.r()*1000.f; // convert mm to um
+    (*m_histProfile1d.at(layer).at(histProfile1d_residual_u_vs_hit_z))[simHit_z] += residualLocal.x()*1000.f;
+    (*m_histProfile1d.at(layer).at(histProfile1d_residual_v_vs_hit_z))[simHit_z] += residualLocal.y()*1000.f;
+    (*m_histProfile1d.at(layer).at(histProfile1d_residual_vs_hit_cosTheta))[simHit_cosTheta] += residualGlobal.r()*1000.f;
+    (*m_histProfile1d.at(layer).at(histProfile1d_residual_vs_clusterSize))[clusterSize] += residualGlobal.r()*1000.f;
+  }
+
+  const float module_z = TransformLocalToGlobal(dd4hep::rec::Vector3D(0.f, 0.f, 0.f), cellID).z();
+  (*m_histProfile1d.at(layer).at(histProfile1d_clusterSize_vs_module_z))[module_z] += clusterSize;
+
+  const int moduleID = m_cellIDdecoder->get(cellID, "module");
+  (*m_histProfile1d.at(layer).at(histProfile1d_clusterSize_vs_module_ID))[static_cast<float>(moduleID)] += clusterSize;
+
 }
 
 /* -- Other Helper functions -- */
