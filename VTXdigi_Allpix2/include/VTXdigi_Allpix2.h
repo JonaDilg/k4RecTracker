@@ -206,6 +206,8 @@ private:
 
   /** @brief Fill debug histograms (executed once per pixel hit per simHit). */
   void FillHistograms_PerPixelHit(const HitInfo& hitInfo, const HitPosition& hitPos, int i_u, int i_v, float pixelChargeMeasured) const;
+
+  void FillHistograms_PerDigiHit(const HitInfo& hitInfo, const HitPosition& hitPos, const int nPixelsReceivedCharge, const int nPixelsFired) const;
   
   /* -- Properties -- */
 
@@ -292,8 +294,8 @@ private:
   mutable std::ofstream m_debugCsvFile; // debug output file. Definitely not thread-safe.
 
   enum { 
-    histGlobal_simHitE, 
-    histGlobal_simHitCharge,
+    histGlobal_simHit_E, 
+    histGlobal_simHit_charge,
     histGlobal_clusterSize_raw, 
     histGlobal_clusterSize_measured,
     histGlobal_EntryPointX, 
@@ -303,12 +305,15 @@ private:
     histGlobal_DisplacementV, 
     histGlobal_DisplacementR, 
     histGlobal_pathLength, 
-    histGlobal_pathLengthGeant4,
+    histGlobal_pathLength_Geant4,
+    histGlobal_pathLength_ratio,
+    histGlobal_chargePerTrackLength,
     histGlobal_chargeCollectionEfficiency_raw, 
     histGlobal_chargeCollectionEfficiency,
+    histGlobal_chargePerPixel_measured,
     histGlobal_pixelChargeMatrix_size_u,
     histGlobal_pixelChargeMatrix_size_v,
-    histGlobal_simHitPDG,
+    histGlobal_simHit_PDG,
     histGlobalArrayLen
   }; // Global histogram indices (these hists collect from all layers). histArrayLen must be last
   std::array<
@@ -361,9 +366,10 @@ private:
   > m_hist1d;
 
   enum{
-    histProfile1d_clusterSize_vs_z,
+    histProfile1d_clusterSize_vs_hit_z,
     histProfile1d_clusterSize_vs_module_z,
     histProfile1d_clusterSize_vs_moduleID,
+    histProfile1d_clusterSize_vs_hit_cosTheta,
     histProfile1dArrayLen };
   mutable std::vector<
     std::array<
@@ -384,7 +390,7 @@ private:
     hist2d_pathLength_vs_simHit_v,
     hist2d_pixelChargeMatrixSize,
     hist2d_IncidentAngle,
-    hist2d_clusterSize_vs_z,
+    hist2d_clusterSize_vs_hit_z,
     hist2d_clusterSize_vs_module_z,
     hist2d_averageCluster_binary,
     hist2d_totalCharge_vs_simHitCharge,
@@ -420,6 +426,23 @@ private:
       histWeighted2dArrayLen
     >
   > m_histWeighted2d;
+
+  enum {
+    histProfile2d_clusterSize_vs_hit_cosTheta_phi,
+    histProfile2d_clusterSize_vs_hit_z_phi,
+    histProfile2dArrayLen };
+  std::vector<
+    std::array<
+      std::unique_ptr<
+        Gaudi::Accumulators::StaticProfileHistogram<
+          2, 
+          Gaudi::Accumulators::atomicity::full,
+          float
+        >
+      >,
+      histProfile2dArrayLen
+    >
+  > m_histProfile2d;
 }; // class VTXdigi_Allpix2
 
 class VTXdigi_Allpix2::HitInfo {
