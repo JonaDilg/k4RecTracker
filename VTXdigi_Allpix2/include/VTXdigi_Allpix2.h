@@ -450,6 +450,7 @@ class VTXdigi_Allpix2::HitInfo {
 
   long int m_eventNumber;
   dd4hep::DDSegmentation::CellID m_cellID;
+  // uint64_t m_cellID;
   dd4hep::rec::ISurface* m_simSurface;
 
   int m_layerIndex;
@@ -465,11 +466,15 @@ class VTXdigi_Allpix2::HitInfo {
 
     HitInfo(const VTXdigi_Allpix2& vtxdigi_AP2, const edm4hep::SimTrackerHit& simHit, const edm4hep::EventHeaderCollection& headers) {
       m_eventNumber = headers.at(0).getEventNumber();
-      m_cellID = simHit.getCellID(); // TODO: apply 64-bit length mask as done in DDPlanarDigi.cpp? ~ Jona 2025-09
+      
+      m_cellID = simHit.getCellID();
+      /* Mask is needed if sensors have segmentation into pixels*/
+      std::uint64_t m_mask = (static_cast<std::uint64_t>(1) << 32) - 1;
+      const std::uint64_t cellID_reduced = m_cellID & m_mask;  // Mask to 32 bits only
 
-      const auto itSimSurface = vtxdigi_AP2.m_simSurfaceMap->find(m_cellID);
+      const auto itSimSurface = vtxdigi_AP2.m_simSurfaceMap->find(cellID_reduced);
       if (itSimSurface == vtxdigi_AP2.m_simSurfaceMap->end())
-        throw std::runtime_error("VTXdigi_Allpix2::HitInfo constructor: Could not find SimSurface for first this hit's cellID: " + std::to_string(m_cellID));
+        throw std::runtime_error("VTXdigi_Allpix2::HitInfo constructor: Could not find SimSurface for this hit's (reduced) cellID: " + std::to_string(cellID_reduced));
       m_simSurface = itSimSurface->second;
     
       /* Use layer index instead of layer to avoid segfaults, if layers are not numbered consecutively
