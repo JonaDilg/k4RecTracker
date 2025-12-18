@@ -190,7 +190,7 @@ private:
   std::tuple<float, float> ComputePathClippingFactors(float t_min, float t_max, const float entryPos_ax, const float pathLength_ax, const float sensorLength_ax) const;
 
   /** @brief Distribute the charge of a path segment to the pixels it covers */
-  void DistributeSegmentCharge(HitInfo& hitInfo, PixelChargeMatrix& pixelChargeMatrix, const SegmentIndices& segment, const float segmentCharge) const;
+  void DistributeSegmentCharge(HitInfo& hitInfo, PixelChargeMatrix& pixelChargeMatrix, const SegmentIndices& segment, const float segmentCharge, const int segmentsInBin) const;
 
   /** @brief Create a digitized hit*/
   void CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const dd4hep::rec::Vector3D& position, const float charge) const;
@@ -202,7 +202,7 @@ private:
   void FillHistograms_PerSimHit(HitInfo& hitInfo, const HitPosition& hitPos, const PixelChargeMatrix& pixelChargeMatrix) const;
 
   /** @brief Fill debug histograms (executed once per path segment). */
-  void FillHistograms_PerSegment(const HitInfo& hitInfo, const SegmentIndices& segment, int i_m, int i_n, const float sharedCharge) const;
+  void FillHistograms_PerSegment(const HitInfo& hitInfo, const SegmentIndices& segment, int i_m, int i_n, const float sharedCharge, const int segmentsInBin) const;
 
   /** @brief Fill debug histograms (executed once per pixel hit per simHit). */
   void FillHistograms_PerPixelHit(const HitInfo& hitInfo, const HitPosition& hitPos, int i_u, int i_v, float pixelChargeMeasured) const;
@@ -314,6 +314,7 @@ private:
     histGlobal_pixelChargeMatrix_size_u,
     histGlobal_pixelChargeMatrix_size_v,
     histGlobal_simHit_PDG,
+    histGlobal_segmentsInBin,
     histGlobalArrayLen
   }; // Global histogram indices (these hists collect from all layers). histArrayLen must be last
   std::array<
@@ -347,8 +348,10 @@ private:
     hist1d_DigiHitCharge_measured,
     hist1d_ClusterSize_raw,
     hist1d_ClusterSize_measured,
-    hist1d_IncidentAngle_ThetaLocal,
-    hist1d_IncidentAngle_PhiLocal,
+    hist1d_ClusterSize_measured_createdInGenerator,
+    hist1d_ClusterSize_measured_createdInSim,
+    hist1d_PathAngle_Incidence,
+    hist1d_PathAngle_Azimuthal,
     hist1d_SimHitMomentum,
     hist1dArrayLen
   }; // all other hists have an individual instance per layer
@@ -389,8 +392,10 @@ private:
     hist2d_hitMap_digiHits, 
     hist2d_pathLength_vs_simHit_v,
     hist2d_pixelChargeMatrixSize,
-    hist2d_IncidentAngle,
+    hist2d_PathAngle,
     hist2d_clusterSize_vs_hit_z,
+    hist2d_clusterSize_vs_hit_z_createdInGenerator,
+    hist2d_clusterSize_vs_hit_z_createdInSim,
     hist2d_clusterSize_vs_module_z,
     hist2d_averageCluster_binary,
     hist2d_totalCharge_vs_simHitCharge,
@@ -450,7 +455,6 @@ class VTXdigi_Allpix2::HitInfo {
 
   long int m_eventNumber;
   dd4hep::DDSegmentation::CellID m_cellID;
-  // uint64_t m_cellID;
   dd4hep::rec::ISurface* m_simSurface;
 
   int m_layerIndex;
@@ -458,6 +462,8 @@ class VTXdigi_Allpix2::HitInfo {
   float m_simPathLength;
   float m_simMomentum; // magnitude of simHit momentum in GeV/c at the position of the sensor
   int32_t m_simPdg;
+  bool m_createdInSimulation;
+  int32_t m_simulatorStatus; // number encoding the simulator status of the particle that created the simHit. Each bit has a meaning, see edm4hep doc for MCParticle.
 
   int m_nSegments;
 
@@ -468,10 +474,9 @@ class VTXdigi_Allpix2::HitInfo {
       m_eventNumber = headers.at(0).getEventNumber();
       
       m_cellID = simHit.getCellID();
-      /* Mask is needed if sensors have segmentation into pixels*/
+      /* Reducing cellID with mask is needed to find surface if sensors are segmented into pixels */
       std::uint64_t m_mask = (static_cast<std::uint64_t>(1) << 32) - 1;
       const std::uint64_t cellID_reduced = m_cellID & m_mask;  // Mask to 32 bits only
-
       const auto itSimSurface = vtxdigi_AP2.m_simSurfaceMap->find(cellID_reduced);
       if (itSimSurface == vtxdigi_AP2.m_simSurfaceMap->end())
         throw std::runtime_error("VTXdigi_Allpix2::HitInfo constructor: Could not find SimSurface for this hit's (reduced) cellID: " + std::to_string(cellID_reduced));
@@ -484,6 +489,8 @@ class VTXdigi_Allpix2::HitInfo {
       m_charge = simHit.getEDep() * (dd4hep::GeV / dd4hep::keV) * vtxdigi_AP2.m_chargePerkeV; // in electrons
       m_simPathLength = simHit.getPathLength(); // in mm
       m_simPdg = simHit.getParticle().getPDG(); 
+      m_createdInSimulation = simHit.getParticle().isCreatedInSimulation();
+      m_simulatorStatus = simHit.getParticle().getSimulatorStatus();
 
       const edm4hep::Vector3f p = simHit.getMomentum();
       m_simMomentum = sqrt(p.x*p.x + p.y*p.y + p.z*p.z); // in GeV/c
@@ -501,6 +508,8 @@ class VTXdigi_Allpix2::HitInfo {
     inline float simPathLength() const { return m_simPathLength; }
     inline float simMomentum() const { return m_simMomentum; }
     inline int32_t simPdg() const { return m_simPdg; }
+    inline bool createdInSimulation() const { return m_createdInSimulation; }
+    inline int32_t simulatorStatus() const { return m_simulatorStatus; }
 
     inline void setNSegments(int n) { m_nSegments = n; }
     inline int nSegments() const { return m_nSegments; }
@@ -718,10 +727,10 @@ class VTXdigi_Allpix2::LookupTable {
           sum += weights.at(row*m_matrixSize + col);
         }
       }
-      if (sum < 0 || sum > 1.f + 1.e-6f)
-        throw GaudiException("Charge sharing matrix (from LUT file) for in-pixel bin (" + std::to_string(j_u) + "," + std::to_string(j_v) + "," + std::to_string(j_w) + ") has a weight sum of " + std::to_string(sum) + ", but needs to lie in [0,1].", "VTXdigi_Allpix2::LookupTable::SetMatrix()", StatusCode::FAILURE);
       if (std::isnan(sum))
         throw GaudiException("Charge sharing matrix (from LUT file) for in-pixel bin (" + std::to_string(j_u) + "," + std::to_string(j_v) + "," + std::to_string(j_w) + ") contains NaN values.", "VTXdigi_Allpix2::LookupTable::SetMatrix()", StatusCode::FAILURE);
+      if (sum < 0 || sum > 1.f + 1.e-5f)
+        throw GaudiException("Charge sharing matrix (from LUT file) for in-pixel bin (" + std::to_string(j_u) + "," + std::to_string(j_v) + "," + std::to_string(j_w) + ") has a weight sum of " + std::to_string(sum) + ", but needs to lie in [0,1].", "VTXdigi_Allpix2::LookupTable::SetMatrix()", StatusCode::FAILURE);
 
       const int index = _FindIndex(j_u, j_v, j_w);
       for (int row = 0; row < m_matrixSize; ++row) {
