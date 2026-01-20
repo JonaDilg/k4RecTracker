@@ -341,73 +341,83 @@ void Clustering_Pixels::CheckGaudiProperties() {
 
 void Clustering_Pixels::InitHistograms() {
   
+  Gaudi::Accumulators::Axis<float> axis_clusterSize{30, -0.5f, 29.5f};
+  Gaudi::Accumulators::Axis<float> axis_residual{2000, -1000.f, 1000.f};
+  
+  Gaudi::Accumulators::Axis<float> axis_energyDep{1000, 0, 50*2000.f};
+  Gaudi::Accumulators::Axis<float> axis_chargeDep{1000, 0, 50*500000.f};
+  Gaudi::Accumulators::Axis<float> axis_z{200, -200, 200};
+  Gaudi::Accumulators::Axis<float> axis_z_layer0{100, -96.5, 96.5};
+  Gaudi::Accumulators::Axis<float> axis_cosTheta{100, 0, 1};
+  Gaudi::Accumulators::Axis<float> axis_moduleID{2000, -0.5f, 1999.5f};
+
   /* -- per-layer histograms -- */
   for (int layer : m_layersToRun.value()) {
+    if (layer == 0) {
+      axis_z = axis_z_layer0; // layer 0 of IDEA vertex det is shorter and we to cover it perfectly to avoid binning-edge-effects, so we use a the correct z range
+    }
+
     std::array< std::unique_ptr< Gaudi::Accumulators::StaticHistogram<1,Gaudi::Accumulators::atomicity::full,float>>, hist1dArrayLen>  hist1d;
 
     hist1d.at(hist1d_clusterSize).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/clusterSize",
         "Cluster size - Layer " + std::to_string(layer) + ";Pixels per cluster;Entries",
-        {50, -0.5f, 49.5f}
+        axis_clusterSize
       }
     );
-
     hist1d.at(hist1d_clusterCharge).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/clusterCharge",
         "Cluster charge - Layer " + std::to_string(layer) + ";Total cluster charge [e];Entries",
-        {1000, 0.f, 50.f*500.f} // for 50 mu sensor thickness
+        axis_chargeDep
       }
     );
-
     hist1d.at(hist1d_simHitsPerCluster).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/simHitsPerCluster",
         "Number of individual particles that contributed to this cluster - Layer " + std::to_string(layer) + ";SimHits per cluster;Entries",
-        {30, -0.5f, 29.5f}
+        axis_clusterSize
       }
     );
-
     hist1d.at(hist1d_residual).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/residual",
         "Total residual - Layer " + std::to_string(layer) + ";Residual [um];Entries",
-        {2000, -1000.f, 1000.f}
+        axis_residual
       }
     );
     hist1d.at(hist1d_residual_z).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/residual_Global_z",
         "Residual in z (global) - Layer " + std::to_string(layer) + ";Residual z [um];Entries",
-        {2000, -1000.f, 1000.f}
+        axis_residual
       }
     );
     hist1d.at(hist1d_residual_u).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/residual_Local_u",
         "Residual in u (local) - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
-        {2000, -1000.f, 1000.f}
+        axis_residual
       }
     );
     hist1d.at(hist1d_residual_v).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/residual_Local_v",
         "Residual in v (local) - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
-        {2000, -1000.f, 1000.f}
+        axis_residual
       }
     );
     hist1d.at(hist1d_residual_w).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/residual_Local_w",
         "Residual in w (local) - Layer " + std::to_string(layer) + ";Residual w [um];Entries",
-        {2000, -1000.f, 1000.f}
+        axis_residual
       }
     );
 
-
-
     m_hist1d.emplace(layer, std::move(hist1d));
+
 
     /* -- 2D histograms -- */
 
@@ -417,24 +427,21 @@ void Clustering_Pixels::InitHistograms() {
       new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/clusterSize_vs_clusterCharge",
         "Cluster size vs. cluster charge - Layer " + std::to_string(layer) + ";Total cluster charge [e];Pixels per cluster",
-        {1000, 0.f, 50.f*500.f},
-        {50, -0.5f, 49.5f} // for 50 mu sensor thickness
+        axis_chargeDep,
+        axis_clusterSize
       }
     );
-
     hist2d.at(hist2d_residual_local).reset(
       new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/residual_2D_local",
         "Residual in local (sensor) coordinates - Layer " + std::to_string(layer) + ";u [um];v [um]",
-        {2000, -1000.f, 1000.f},
-        {2000, -1000.f, 1000.f}
+        axis_residual,
+        axis_residual
       }
     );
-
-
-
     
     m_hist2d.emplace(layer, std::move(hist2d));
+
 
     /* -- 1D Profile histograms -- */
 
@@ -444,74 +451,68 @@ void Clustering_Pixels::InitHistograms() {
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/clusterSize_vs_hit_z",
         "Cluster size - Layer " + std::to_string(layer) + ";SimHit global z position [mm];Pixels per cluster",
-        {2000, -500.f, 500.f}
+        axis_z
       }
     );
     histProfile1d.at(histProfile1d_clusterSize_vs_hit_cosTheta).reset(
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/clusterSize_vs_hit_cosTheta",
         "Cluster size - Layer " + std::to_string(layer) + ";cosTheta of simHit position;Pixels per cluster",
-        {200, 0.f, 1.f}
+        axis_cosTheta
       }
     );
-
     histProfile1d.at(histProfile1d_clusterSize_vs_module_z).reset(
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/clusterSize_vs_module_z",
         "Cluster size - Layer " + std::to_string(layer) + ";module global z position [mm];Pixels per cluster",
-        {2000, -500.f, 500.f}
+        axis_z
       }
     );
     histProfile1d.at(histProfile1d_clusterSize_vs_module_ID).reset(
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/clusterSize_vs_module_ID",
         "Cluster size - Layer " + std::to_string(layer) + ";Module ID;Pixels per cluster",
-        {2000, -0.5f, 1999.5f}
+        axis_moduleID
       }
     );
-
     histProfile1d.at(histProfile1d_residual_vs_hit_z).reset(
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/residual_vs_hit_z",
         "Total residual - Layer " + std::to_string(layer) + ";SimHit global z position [mm];Residual [um]",
-        {2000, -500.f, 500.f}
+        axis_z
       }
     );
     histProfile1d.at(histProfile1d_residual_u_vs_hit_z).reset(
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/residual_u_vs_hit_z",
         "Local residual in u - Layer " + std::to_string(layer) + ";SimHit global z position [mm];Residual in u (sensor frame) [um]",
-        {2000, -500.f, 500.f}
+        axis_z
       }
     );
     histProfile1d.at(histProfile1d_residual_v_vs_hit_z).reset(
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/residual_v_vs_hit_z",
         "Local residual in v - Layer " + std::to_string(layer) + ";SimHit global z position [mm];Residual in v (sensor frame) [um]",
-        {2000, -500.f, 500.f}
+        axis_z
       }
     );
     histProfile1d.at(histProfile1d_residual_vs_hit_cosTheta).reset(
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/residual_vs_hit_cosTheta",
         "Total residual - Layer " + std::to_string(layer) + ";SimHit global cosTheta;Residual [um]",
-        {200, 0.f, 1.f}
+        axis_cosTheta
       }
     );
     histProfile1d.at(histProfile1d_residual_vs_clusterSize).reset(
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/residual_vs_clusterSize",
         "Total residual - Layer " + std::to_string(layer) + ";Cluster size [pixels];Residual [um]",
-        {50, -0.5f, 49.5f}
+        axis_clusterSize
       }
     );
 
-
-
     m_histProfile1d.emplace(layer, std::move(histProfile1d));
   }
-
-
 }
 
 void Clustering_Pixels::PrintCountersSummary() const {
