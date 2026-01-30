@@ -223,7 +223,7 @@ private:
   Gaudi::Property<float> m_cutDepositedCharge{this, "CutDepositedCharge", 0.0, "Minimum charge (e-) of SimTrackerHit to be digitized"};
   
   Gaudi::Property<std::vector<int>> m_layersToDigitize{this, "LayersToDigitize", {}, "Which layers to digitize (0-indexed). If empty, all layers are digitized."};
-
+  
   Gaudi::Property<float> m_targetPathSegmentLength{this, "TargetPathSegmentLength", 0.002, "Length of the path segments, that the simHits path through a sensor is divided into. In mm. Defines the precision of the charge deposition along the path."};
   Gaudi::Property<float> m_pathLengthShorteningFactorGeant4{this, "PathLengthShorteningFactorGeant4", 1.05, "Relative path length (to Geant4 path length), above which the path is shortened to the Geant4 length. (Geant4 length includes multiple scattering and curling in B-field, which are lost in our linear approximation of the path)."};
   
@@ -233,12 +233,13 @@ private:
   Gaudi::Property<float> m_timeSmearFactor{this, "PixelTimeSmear", 0., "Gaussian width for the time smearing applied on the pixel time. Applied for each digiHit individually."};
   
   Gaudi::Property<std::string> m_localNormalVectorDir{this, "LocalNormalVectorDir", "x", "Normal Vector direction in sensor local frame (may differ according to geometry definition within k4geo). A negative sign inverts the u-axis, st. a LH coordinate system is transformed to a RH system. Global coordinates (x,y,z) are FCC coordinate system (see FSR). Local coordinates (u,v,w) are defined st. u x v spans the sensor plane and w is the normal vectpor. u goes dominantly in r-phi direction, v is dominantly parallel to z, and w points away from the IP (this results in a RH coordinate system). Possible values: x, y, z, -x, -y, -z, defaults to x (which is correct for IDEA vertex barrel)."};
-
+  
   /* LUT import properties */
   Gaudi::Property<std::vector<float>> m_globalSharingMatrix{this, "GlobalChargeSharingMatrix", {}, "Flat vector containing one charge sharing matrix to be applied globally. In row-major order (ie. row-by-row), starting on top left. Length must be MatrixSize*MatrixSize"};
   Gaudi::Property<std::string> m_LUTFileName{this, "LookupTableFileName", "", "Name of the file supplying the charge sharing lookup table."};
-
+  
   /* Debugging */
+  Gaudi::Property<int> m_infoPrintInterval{this, "InfoPrintInterval", 100, "The interval (in number of events) at which info messages are printed"};
   Gaudi::Property<bool> m_debugHistograms{this, "DebugHistograms", false, "Whether to create and fill debug histograms. Not recommended for multithreading, might lead to crashes."};
   Gaudi::Property<std::string> m_debugCsvFileName{this, "DebugCsvFileName", "", "Name of a CSV file to output detailed per-hit debug information. If empty, no debug output is created."};
 
@@ -393,12 +394,14 @@ private:
     hist2d_pathLength_vs_simHit_v,
     hist2d_pixelChargeMatrixSize,
     hist2d_PathAngle,
+    hist2d_PathAngle_Incidence_vs_hit_z,
     hist2d_clusterSize_vs_hit_z,
     hist2d_clusterSize_vs_hit_z_createdInGenerator,
     hist2d_clusterSize_vs_hit_z_createdInSim,
     hist2d_clusterSize_vs_module_z,
     hist2d_averageCluster_binary,
     hist2d_totalCharge_vs_simHitCharge,
+    hist2d_simVertex_z_vs_simHit_z,
     hist2dArrayLen
   };
   std::vector<
@@ -461,6 +464,7 @@ class VTXdigi_Allpix2::HitInfo {
   float m_charge;
   float m_simPathLength;
   float m_simMomentum; // magnitude of simHit momentum in GeV/c at the position of the sensor
+  float m_simVertex_z; // z-coordinate of the simHit creation vertex in global coordinates
   int32_t m_simPdg;
   bool m_createdInSimulation;
   int32_t m_simulatorStatus; // number encoding the simulator status of the particle that created the simHit. Each bit has a meaning, see edm4hep doc for MCParticle.
@@ -491,6 +495,7 @@ class VTXdigi_Allpix2::HitInfo {
       m_simPdg = simHit.getParticle().getPDG(); 
       m_createdInSimulation = simHit.getParticle().isCreatedInSimulation();
       m_simulatorStatus = simHit.getParticle().getSimulatorStatus();
+      m_simVertex_z = simHit.getParticle().getVertex().z; // z-coordinate of simHit creation vertex in global coordinates
 
       const edm4hep::Vector3f p = simHit.getMomentum();
       m_simMomentum = sqrt(p.x*p.x + p.y*p.y + p.z*p.z); // in GeV/c
@@ -507,6 +512,7 @@ class VTXdigi_Allpix2::HitInfo {
     inline float charge() const { return m_charge; }
     inline float simPathLength() const { return m_simPathLength; }
     inline float simMomentum() const { return m_simMomentum; }
+    inline float simVertexZ() const { return m_simVertex_z; }
     inline int32_t simPdg() const { return m_simPdg; }
     inline bool createdInSimulation() const { return m_createdInSimulation; }
     inline int32_t simulatorStatus() const { return m_simulatorStatus; }

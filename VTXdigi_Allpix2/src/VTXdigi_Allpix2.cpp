@@ -1049,6 +1049,14 @@ void VTXdigi_Allpix2::InitHistograms() {
         axis_theta
       }
     );
+    m_hist2d.at(layerIndex).at(hist2d_PathAngle_Incidence_vs_hit_z).reset(
+      new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float>{this, 
+        "SimHit/PathAngle_vs_Hit_z_2D_Layer"+std::to_string(layer),
+        "Angle of the particle path through the sensor wrt. the sensor plane - Layer " + std::to_string(layer) + ";SimHit z [mm];Incidence angle (to sensor normal) [deg]",
+        axis_zAxis,
+        axis_theta
+      }
+    );
     
     m_hist2d.at(layerIndex).at(hist2d_clusterSize_vs_hit_z).reset(
       new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float>{this, 
@@ -1097,6 +1105,14 @@ void VTXdigi_Allpix2::InitHistograms() {
         "Sum of digiHit charge (per simHit) vs simHit deposited charge - Layer " + std::to_string(layer) + ";SimHit deposited charge [e-];Sum of digiHit charge [e-]",
         axis_chargeDep,
         axis_chargeDep
+      }
+    ); 
+    m_hist2d.at(layerIndex).at(hist2d_simVertex_z_vs_simHit_z).reset(
+      new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float>{this,
+        "SimHit/SimVertex_z_vs_SimHit_z_Layer"+std::to_string(layer),
+        "z position of simHit creation vertex vs z position of simHit - Layer " + std::to_string(layer) + ";SimHit z [mm];Creation vertex z [mm]",
+        axis_zAxis,
+        axis_zAxis
       }
     ); 
 
@@ -1201,8 +1217,8 @@ void VTXdigi_Allpix2::PrintCounterSummary() const {
 
 bool VTXdigi_Allpix2::CheckEventSetup(const edm4hep::SimTrackerHitCollection& simHits, const edm4hep::EventHeaderCollection& headers) const {
   const int eventNumber = headers.at(0).getEventNumber();
-  if (eventNumber % 200 == 1) {
-    info() << "PROCESSING event (run " << headers.at(0).getRunNumber() << ", event " << headers.at(0).getEventNumber() << ", found " << simHits.size() << " simHits)" << endmsg;
+  if ((eventNumber+1) % m_infoPrintInterval == 0) {
+    info() << "PROCESSING event (run " << headers.at(0).getRunNumber() << ", event " << headers.at(0).getEventNumber() << ", found " << simHits.size() << " simHits). " << m_counter_eventsRead.value()+1 << " events processed so far." << endmsg;
   }
   else {
     debug() << "PROCESSING event (run " << headers.at(0).getRunNumber() << ", event " << headers.at(0).getEventNumber() << ", found " << simHits.size() << " simHits)" << endmsg;
@@ -1256,7 +1272,7 @@ std::tuple<VTXdigi_Allpix2::HitInfo, VTXdigi_Allpix2::HitPosition> VTXdigi_Allpi
   return std::make_tuple(hitInfo, hitPos);
 }
 
-bool VTXdigi_Allpix2::CheckSimHitCuts (const HitInfo& hitInfo, const HitPosition& hitPos) const {
+bool VTXdigi_Allpix2::CheckSimHitCuts(const HitInfo& hitInfo, const HitPosition& hitPos) const {
 
   // DISMISS if entry point is outside sensor
   if (m_cutPathOutsideSensor) {
@@ -1272,6 +1288,29 @@ bool VTXdigi_Allpix2::CheckSimHitCuts (const HitInfo& hitInfo, const HitPosition
       ++m_counter_simHitsRejected_OutsideSensor;
       return false;
     }
+
+    if (abs(hitPos.entry.x()) > (m_sensorLength.at(0)/2 + m_numericLimit_float) ) { // entry point is outside sensor u size
+      verbose() << " - DISMISSED simHit (entry point is outside sensor u size (local u = " << hitPos.entry.x()*1000 << " um, sensor u size = " << m_sensorLength.at(0)*1000 << " um)." << endmsg;
+      ++m_counter_simHitsRejected_OutsideSensor;
+      return false;
+    }
+    if (abs(hitPos.entry.x()+hitPos.path.x()) > (m_sensorLength.at(0)/2 + m_numericLimit_float) ) { // exit point is outside sensor u size
+      verbose() << " - DISMISSED simHit (exit point is outside sensor u size (local u = " << (hitPos.entry.x()+hitPos.path.x())*1000 << " um, sensor u size = " << m_sensorLength.at(0)*1000 << " um)." << endmsg;
+      ++m_counter_simHitsRejected_OutsideSensor;
+      return false;
+    }
+
+    if (abs(hitPos.entry.y()) > (m_sensorLength.at(1)/2 + m_numericLimit_float) ) { // entry point is outside sensor v size
+      verbose() << " - DISMISSED simHit (entry point is outside sensor v size (local v = " << hitPos.entry.y()*1000 << " um, sensor v size = " << m_sensorLength.at(1)*1000 << " um)." << endmsg;
+      ++m_counter_simHitsRejected_OutsideSensor;
+      return false;
+    }
+    if (abs(hitPos.entry.y()+hitPos.path.y()) > (m_sensorLength.at(1)/2 + m_numericLimit_float) ) { // exit point is outside sensor v size
+      verbose() << " - DISMISSED simHit (exit point is outside sensor v size (local v = " << (hitPos.entry.y()+hitPos.path.y())*1000 << " um, sensor v size = " << m_sensorLength.at(1)*1000 << " um)." << endmsg;
+      ++m_counter_simHitsRejected_OutsideSensor;
+      return false;
+    }
+
   }
 
   // DISMISS if outside minimum charge cut
@@ -1340,7 +1379,7 @@ std::tuple<dd4hep::rec::Vector3D, dd4hep::rec::Vector3D> VTXdigi_Allpix2::Constr
       simHitPath = (t_max - t_min) * simHitPath;
     } 
     else {
-      warning() << "ConstructSimHitPath(): Cannot clip simHitPath to sensor edges. The path lies completely outside the sensor volume. Clipping t_min = " << t_min << ", t_max = " << t_max << "." << endmsg;
+      warning() << "ConstructSimHitPath(): Cannot clip simHitPath to sensor edges. The path lies completely outside the sensor volume. (Clipping factors: t_min = " << t_min << ", t_max = " << t_max << ")" << endmsg;
       verbose() << " - before clipping: EntryPos: (" << simHitEntryPos.x() << " mm, " << simHitEntryPos.y() << " mm, " << simHitEntryPos.z() << " mm), exitPos: (" << simHitPath.x() << " mm, " << simHitPath.y() << " mm, " << simHitPath.z() << " mm)" << endmsg;
     }
   }
@@ -1550,6 +1589,9 @@ void VTXdigi_Allpix2::FillHistograms_PerSimHit(HitInfo& hitInfo, const HitPositi
   ++(*m_hist1d.at(hitInfo.layerIndex()).at(hist1d_PathAngle_Incidence))[pathAngleIncidence];
   ++(*m_hist1d.at(hitInfo.layerIndex()).at(hist1d_PathAngle_Azimuthal))[pathAngleAzimuthal];
   ++(*m_hist2d.at(hitInfo.layerIndex()).at(hist2d_PathAngle))[{pathAngleAzimuthal, pathAngleIncidence}];
+  ++(*m_hist2d.at(hitInfo.layerIndex()).at(hist2d_PathAngle_Incidence_vs_hit_z))[{hitPos.global.z(), pathAngleIncidence}];
+  
+  ++(*m_hist2d.at(hitInfo.layerIndex()).at(hist2d_simVertex_z_vs_simHit_z))[{hitPos.global.z(), hitInfo.simVertexZ()}];
 }
 
 void VTXdigi_Allpix2::FillHistograms_PerSegment(const HitInfo& hitInfo, const SegmentIndices& segment, int i_m, int i_n, const float sharedCharge, const int segmentsInBin) const {
