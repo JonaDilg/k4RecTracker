@@ -84,11 +84,13 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
 
   /* Output collections */
   auto digiHits = edm4hep::TrackerHitPlaneCollection();
-  auto digiHitsLinks = edm4hep::TrackerHitSimTrackerHitLinkCollection();
+  auto digiHitLinks = edm4hep::TrackerHitSimTrackerHitLinkCollection();
 
   const u_int32_t rngSeed = m_uidSvc->getUniqueID(headers[0].getEventNumber(), headers[0].getRunNumber(), this->name());
   TRandom2 rngEngine = TRandom2(rngSeed);
   verbose() << " - RNG engine initialized, using seed " << rngSeed << endmsg;
+
+  /* Create new simHitCollection in case the truth position needs to be shifted along the path (if m_depletedRegionDepthCenter != 0)*/
 
   /* Loop over sim hits, digitize them, create output collections */
   for (const auto& simHit : simHits) {
@@ -121,7 +123,7 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
     pixelChargeMatrix.GenerateNoise(rngEngine, m_electronicNoise); // generate noise only after we know how large the matrix is in the end
 
     /* find pixels with charge above threshold, create digiHits */
-    AnalyseSharedCharge(hitInfo, hitPos, pixelChargeMatrix, simHit, digiHits, digiHitsLinks);
+    AnalyseSharedCharge(hitInfo, hitPos, pixelChargeMatrix, simHit, digiHits, digiHitLinks);
 
     if (m_debugHistograms)
       FillHistograms_PerSimHit(hitInfo, hitPos, pixelChargeMatrix);
@@ -134,9 +136,9 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
   } // loop over sim hits
   
   debug() << "FINISHED event." << endmsg;
-  verbose() << " - Returning collections: digiHits.size()=" << digiHits.size() << ", digiHitsLinks.size()=" << digiHitsLinks.size() << endmsg;
+  verbose() << " - Returning collections: digiHits.size()=" << digiHits.size() << ", digiHitLinks.size()=" << digiHitLinks.size() << endmsg;
   
-  return std::make_tuple(std::move(digiHits), std::move(digiHitsLinks));
+  return std::make_tuple(std::move(digiHits), std::move(digiHitLinks));
 } // event loop
 
 
@@ -334,9 +336,13 @@ void VTXdigi_Allpix2::InitDetectorGeometry() {
   if (!firstSimSurface)
     throw GaudiException("SimSurface pointer for first sensor (volumeID " + std::to_string(firstSensorVolumeID) + ") in subDetector " + m_subDetName.value() + " is null while checking geometry consistency.", "VTXdigi_Allpix2::InitDetectorGeometry()", StatusCode::FAILURE);
 
-  float sensorInnerThickness = firstSimSurface->innerThickness() * 10; // in mm
+  warning() << firstSimSurface->origin() << endmsg;
+  warning() << dynamic_cast<dd4hep::rec::VolPlaneImpl>(firstSimSurface)->origin() << endmsg;
+
   float sensorOuterThickness = firstSimSurface->outerThickness() * 10; // in mm
   m_sensorThickness = sensorInnerThickness + sensorOuterThickness;
+  if (abs(m_depletedRegionDepthCenter.value()) > m_sensorThickness * 500.f)
+    throw GaudiException("Property DepletedRegionDepthCenter (" + std::to_string(m_depletedRegionDepthCenter.value()) + " mm) is outside of the sensor thickness (" + std::to_string(m_sensorThickness) + " mm) in subDetector " + m_subDetName.value() + ".", "VTXdigi_Allpix2::InitDetectorGeometry()", StatusCode::FAILURE);
 
   m_sensorLength.at(0) = firstSimSurface->length_along_u() * 10; // convert to mm
   m_sensorLength.at(1) = firstSimSurface->length_along_v() * 10;
@@ -1263,14 +1269,56 @@ std::tuple<VTXdigi_Allpix2::HitInfo, VTXdigi_Allpix2::HitPosition> VTXdigi_Allpi
   HitPosition hitPos;
   hitPos.global = ConvertVector(simHit.getPosition()); // global simHit position (from Geant4)
   hitPos.local = TransformGlobalToLocal(hitPos.global, hitInfo.cellID()); // the same position, but in the local sensor frame (u,v,w)
+
   std::tie(hitPos.entry, hitPos.path) = ConstructSimHitPath(hitInfo, hitPos, simHit); // simHit path through the sensor
   /* -> hitPos is now fully defined */
+
+  /* Shift hitpos local along path st. it sits in centre of charge collection region */
+  if (m_depletedRegionDepthCenter != 0.f) {
+    /* If the path does not pass through correct w coord: set to the end of path that is closest */
+    float path_w0 = hitPos.entry.z();
+    float  path_w1 = hitPos.entry.z() + hitPos.path.z();
+    if (path_w0 < m_depletedRegionDepthCenter && path_w1 < m_depletedRegionDepthCenter) {
+      verbose() << " - Whole path lies below m_depletedRegionDepthCenter " << m_depletedRegionDepthCenter << " (" << path_w0 << "," << path_w1 << "). Placing simHitPos at closest end of path." << endmsg;
+      if (path_w0 > path_w1) {
+        hitPos.local = hitPos.entry;
+      }
+      else {
+        hitPos.local = hitPos.entry + hitPos.path;
+      }
+    }
+    else if (path_w0 > m_depletedRegionDepthCenter && path_w1 > m_depletedRegionDepthCenter) {
+      verbose() << " - Whole path lies above m_depletedRegionDepthCenter " << m_depletedRegionDepthCenter << " (" << path_w0 << "," << path_w1 << "). Placing simHitPos at closest end of path." << endmsg;
+      if (path_w0 < path_w1) {
+        hitPos.local = hitPos.entry;
+      }
+      else {
+        hitPos.local = hitPos.entry + hitPos.path;
+      }
+    }
+    /* shift along the path to correct depth*/
+    else {
+      
+      float path_w = hitPos.entry.z();
+      float path_dw = hitPos.path.z();
+
+      float shift_dw = path_w - m_depletedRegionDepthCenter;
+      float shift_factor = shift_dw / path_dw;
+
+      hitPos.local = hitPos.entry + shift_factor*hitPos.path;
+      hitPos.global = TransformLocalToGlobal(hitPos.local, hitInfo.cellID());
+
+      verbose() << " - Shifted simHitPos along path to w = " << hitPos.local.z() << " by dist " << shift_factor*hitPos.path.r() << endmsg;
+    }   
+  }
 
   hitInfo.setNSegments(std::max(1, int( hitPos.path.r() / m_targetPathSegmentLength ))); // both in mm
   /* -> with this, hitInfo is now fully defined as well */
 
   return std::make_tuple(hitInfo, hitPos);
 }
+
+
 
 bool VTXdigi_Allpix2::CheckSimHitCuts(const HitInfo& hitInfo, const HitPosition& hitPos) const {
 
@@ -1455,7 +1503,6 @@ VTXdigi_Allpix2::PixelChargeMatrix VTXdigi_Allpix2::DepositAndCollectCharge(HitI
   return pixelChargeMatrix;
 }
 
-
 void VTXdigi_Allpix2::DistributeSegmentCharge(HitInfo& hitInfo, PixelChargeMatrix& pixelChargeMatrix, const SegmentIndices& segment, const float segmentCharge, const int segmentsInBin) const {
   if (segment.i_u == -1) { // ComputeSegmentIndices() returns -1 if any dimension is outside sensor volume
       warning() << "Applying Kernel: Bin lies outside sensor volume. Dismissing." << endmsg;
@@ -1491,8 +1538,8 @@ void VTXdigi_Allpix2::DistributeSegmentCharge(HitInfo& hitInfo, PixelChargeMatri
   }
 }
 
-void VTXdigi_Allpix2::AnalyseSharedCharge(const HitInfo& hitInfo, const HitPosition& hitPos, const PixelChargeMatrix& pixelChargeMatrix, const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks) const {
-  /** Process the shared charge in pixelChargeMatrix, create digiHits and fill digiHits and digiHitsLinks collections */
+void VTXdigi_Allpix2::AnalyseSharedCharge(const HitInfo& hitInfo, const HitPosition& hitPos, const PixelChargeMatrix& pixelChargeMatrix, const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitLinks) const {
+  /** Process the shared charge in pixelChargeMatrix, create digiHits and fill digiHits and digiHitLinks collections */
 
   debug() << "     - Processed all segments. Looping over pixelChargeMatrix." << endmsg;
   
@@ -1524,7 +1571,7 @@ void VTXdigi_Allpix2::AnalyseSharedCharge(const HitInfo& hitInfo, const HitPosit
       dd4hep::rec::Vector3D pixelCenterGlobal = TransformLocalToGlobal(pixelCenterLocal, hitInfo.cellID());
 
       debug() << "     - Pixel (" << i_u << ", " << i_v << ") at (" << pixelCenterLocal.x() << ", " << pixelCenterLocal.y() << ", " << pixelCenterLocal[2] << ") mm received a measured/raw charge of " << pixelChargeMeasured << "/" << pixelChargeRaw << " e-, center at global position " << pixelCenterGlobal[0] << " mm, " << pixelCenterGlobal[1] << " mm, " << pixelCenterGlobal[2] << " mm" << endmsg;
-      CreateDigiHit(simHit, digiHits, digiHitsLinks, pixelCenterGlobal, pixelChargeMeasured);
+      CreateDigiHit(simHit, digiHits, digiHitLinks, pixelCenterGlobal, pixelChargeMeasured);
       ++m_counter_digiHitsCreated;
 
       if (m_debugHistograms)
@@ -1544,6 +1591,16 @@ void VTXdigi_Allpix2::AnalyseSharedCharge(const HitInfo& hitInfo, const HitPosit
     verbose() << " - From this simHit, " << nPixelsFired << " pixels received charge." << endmsg;
   }
 } // AnalyseSharedCharge()
+
+// dd4hep::rec::Vector3D VTXdigi_Allpix2::ComputeShiftedHitPos(const edm4hep::SimTrackerHit& simHit) {
+//   dd4hep::rec::Vector3D hitPos_global = ConvertVector(simHit.getPosition()); // global simHit position (from Geant4)
+//   dd4hep::rec::Vector3D hitPos_local = TransformGlobalToLocal(hitPos.global, hitInfo.cellID()); // the same position, but in the local sensor frame (u,v,w)
+
+//   double simHitGlobalMomentum_double[3] = {simHit.getMomentum().x * dd4hep::GeV, simHit.getMomentum().y * dd4hep::GeV, simHit.getMomentum().z * dd4hep::GeV}; // need floats for the TransfomationMatrix functions
+
+//   // TODO
+
+// }
 
 void VTXdigi_Allpix2::FillHistograms_PerSimHit(HitInfo& hitInfo, const HitPosition& hitPos, const PixelChargeMatrix& pixelChargeMatrix) const {
   /* Is executed once per simHit (that passes all cuts etc.), after it has been processed  */
@@ -1766,8 +1823,9 @@ dd4hep::rec::Vector3D VTXdigi_Allpix2::ComputePixelCenter_Local(const int i_u, c
 
   float posU = -0.5 * length_u + (i_u + 0.5) * m_pixelPitch.at(0); // in mm
   float posV = -0.5 * length_v + (i_v + 0.5) * m_pixelPitch.at(1); // in mm
+  float posZ = m_depletedRegionDepthCenter;
 
-  return dd4hep::rec::Vector3D(posU, posV, 0.); 
+  return dd4hep::rec::Vector3D(posU, posV, posZ); 
 }
 
 
@@ -1893,7 +1951,7 @@ std::tuple<float, float> VTXdigi_Allpix2::ComputePathClippingFactors(float t_min
   return std::make_tuple(t_min, t_max);
 }
 
-void VTXdigi_Allpix2::CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitsLinks, const dd4hep::rec::Vector3D& position, const float charge) const {
+void VTXdigi_Allpix2::CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitLinks, const dd4hep::rec::Vector3D& position, const float charge) const {
   // overload to allow passing dd4hep::rec::Vector3D as position. ~ Jona 2025-09
 
   auto digiHit = digiHits.create();
@@ -1904,7 +1962,7 @@ void VTXdigi_Allpix2::CreateDigiHit(const edm4hep::SimTrackerHit& simHit, edm4he
   // TODO: check if position is within sensor bounds & force it onto sensor simSurface ~ Jona 2025-09
   digiHit.setTime(simHit.getTime());
   
-  auto digiHitLink = digiHitsLinks.create();
+  auto digiHitLink = digiHitLinks.create();
   digiHitLink.setFrom(digiHit);
   digiHitLink.setTo(simHit);
 }

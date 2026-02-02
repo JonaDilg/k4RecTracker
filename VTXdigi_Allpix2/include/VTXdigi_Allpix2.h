@@ -223,6 +223,8 @@ private:
   Gaudi::Property<float> m_cutDepositedCharge{this, "CutDepositedCharge", 0.0, "Minimum charge (e-) of SimTrackerHit to be digitized"};
   
   Gaudi::Property<std::vector<int>> m_layersToDigitize{this, "LayersToDigitize", {}, "Which layers to digitize (0-indexed). If empty, all layers are digitized."};
+
+  Gaudi::Property<float> m_depletedRegionDepthCenter{this, "DepletedRegionDepthCenter", 0.f, "By default hits are marked in vertical center of the pixel. If only part of the sensor thickness is depleted, that is wrong. DepletedRegionDepthCenter defines the vertical center of gravity of the charge collection. In um, [-thickness/2, thickness/2]. Defaults to 0 (do not shift the truth position)."};
   
   Gaudi::Property<float> m_targetPathSegmentLength{this, "TargetPathSegmentLength", 0.002, "Length of the path segments, that the simHits path through a sensor is divided into. In mm. Defines the precision of the charge deposition along the path."};
   Gaudi::Property<float> m_pathLengthShorteningFactorGeant4{this, "PathLengthShorteningFactorGeant4", 1.05, "Relative path length (to Geant4 path length), above which the path is shortened to the Geant4 length. (Geant4 length includes multiple scattering and curling in B-field, which are lost in our linear approximation of the path)."};
