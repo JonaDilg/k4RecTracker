@@ -28,6 +28,7 @@
 #include <string> // added by Jona
 #include <vector>
 #include <cmath> // for std::fmod
+#include <queue>
 
 // for debugging-csv
 #include <iostream>
@@ -65,6 +66,7 @@ private:
 
   struct HitData {
     float u = 0, v = 0;
+    int i_u=0, i_v=0;
     float eDep = 0;
     float time = 0;
     std::shared_ptr<const edm4hep::TrackerHitPlane> hitPtr = nullptr;
@@ -141,6 +143,8 @@ private:
   mutable Gaudi::Accumulators::Counter<> m_counter_hitsRead{this, "Tracker hits read"};
   mutable Gaudi::Accumulators::Counter<> m_counter_hitsRejected_layerIgnored{this, "Tracker hits rejected (on layer that is ignored)"};
   mutable Gaudi::Accumulators::Counter<> m_counter_hitsAccepted{this, "Tracker hits accepted"};
+  mutable Gaudi::Accumulators::Counter<> m_counter_clustersStarted{this, "Clusters started"};
+  mutable Gaudi::Accumulators::Counter<> m_counter_digiHitsCreated{this, "Digi hits created"};
 
   /* -- Gaudi properties -- */
 
@@ -231,4 +235,14 @@ private:
     >
   > m_histProfile1d;
 };
+ 
+int ComputeBinIndex(float x, float binX0, float binWidth, int binN);
+std::pair<int, int> ComputePixelIndices(const dd4hep::rec::Vector3D& pos);
 
+struct Hash_PairInt {
+  size_t operator()(const std::pair<int,int>& i_uv) const noexcept {
+    return (static_cast<uint64_t>(i_uv.first) << 32) ^ static_cast<uint32_t>(i_uv.second);
+  }
+};
+
+std::array<std::pair<int, int>, 4> GetDirectNeighbors(const std::pair<int, int>& i_uv);
