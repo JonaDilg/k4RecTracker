@@ -726,7 +726,8 @@ void VTXdigi_Allpix2::InitHistograms() {
   Gaudi::Accumulators::Axis<float> axis_energyDep{1000, 0, m_sensorThickness*2000.f};
   Gaudi::Accumulators::Axis<float> axis_chargeDep{1000, 0, m_sensorThickness*500000.f};
   Gaudi::Accumulators::Axis<float> axis_particleMom{10000, 0.f, 5000.f};
-  Gaudi::Accumulators::Axis<float> axis_pathLength{500, 0, m_sensorThickness*10*1000.f};
+  // Gaudi::Accumulators::Axis<float> axis_pathLength{500, 0, m_sensorThickness*10.f*1000.f};
+  Gaudi::Accumulators::Axis<float> axis_pathLength{600, 0.f, 300.f};
   Gaudi::Accumulators::Axis<float> axis_displacement{400, -200, 200};
   Gaudi::Accumulators::Axis<float> axis_displacementAbs{300, 0, 300};
   Gaudi::Accumulators::Axis<float> axis_theta{4*180, 0, 180};
@@ -1334,47 +1335,53 @@ std::tuple<dd4hep::rec::Vector3D, dd4hep::rec::Vector3D> VTXdigi_Allpix2::Constr
    */
   
   /* get simHitMomentum (this vector gives the exact angles of the particle's path through the sensor. We assume that path is linear.). */
-  double simHitGlobalMomentum_double[3] = {simHit.getMomentum().x * dd4hep::GeV, simHit.getMomentum().y * dd4hep::GeV, simHit.getMomentum().z * dd4hep::GeV}; // need floats for the TransfomationMatrix functions
+
+  const float eps = 1e-6;
 
   TGeoHMatrix transformationMatrix = ComputeTransformationMatrix(hitInfo.cellID());
 
+  double simHitGlobalMomentum_double[3] = {
+    simHit.getMomentum().x,
+    simHit.getMomentum().y,
+    simHit.getMomentum().z
+  };
   double simHitLocalMomentum_double[3] = {0.0, 0.0, 0.0};
   transformationMatrix.MasterToLocalVect(simHitGlobalMomentum_double, simHitLocalMomentum_double);
 
-  /* Scale the simHitPath such that it extends from one sensor surface to the other */
+  /* Step 1 - travel vector */
   dd4hep::rec::Vector3D simHitPath(
     simHitLocalMomentum_double[0],
     simHitLocalMomentum_double[1],
     simHitLocalMomentum_double[2]);
-
-  float scaleFactor = m_sensorThickness / std::abs(simHitLocalMomentum_double[2]);
-  simHitPath = scaleFactor * simHitPath ; // now, simHitPath extends for one sensor surface to the other surface
     
-  /* calculate the path's entry position into the sensor, by placing it such that the path passes through the simHit position */
-  if (abs(hitPos.local.z()) > (0.5*m_sensorThickness + m_numericLimit_float)) {
+  const double scaleFactor_travel = m_sensorThickness / std::abs(simHitLocalMomentum_double[2]);
+  simHitPath = scaleFactor_travel * simHitPath ; // now, simHitPath extends for one sensor surface to the other surface
+    
+  /* Step 2 - entry point */
+  if (abs(hitPos.local.z()) > (0.5*m_sensorThickness + eps)) {
     warning() << "SimHit position is outside the sensor volume (local w = " << hitPos.local.z() << " mm, sensor thickness = " << m_sensorThickness << " mm). This should never happen. Forcing it to w=0." << endmsg;
     hitPos.local.z() = 0.;
   }
-  scaleFactor = 0.; // this will now hold the fraction of the simHitPath between simHitPos and entry point, in terms of [0,1] on simHitPath
+  float shiftDist_w;
   if (simHitPath.z() >= 0.) {
-    const float shiftDist_w = 0.5 * m_sensorThickness + hitPos.local.z();
-    scaleFactor = shiftDist_w / simHitPath.z();
+    shiftDist_w = 0.5 * m_sensorThickness + hitPos.local.z(); 
   }
   else {
-    const float shiftDist_w = -0.5 * m_sensorThickness + hitPos.local.z();
-    scaleFactor = shiftDist_w / simHitPath.z();
+    shiftDist_w = -0.5 * m_sensorThickness + hitPos.local.z(); 
   }
-  dd4hep::rec::Vector3D simHitEntryPos = hitPos.local - scaleFactor * simHitPath; // entry pos is now on one of the two sensor surfaces
+  const float shiftFactor_w = shiftDist_w / simHitPath.z();
+  dd4hep::rec::Vector3D simHitEntryPos = hitPos.local - shiftFactor_w * simHitPath; 
 
-  /* If the path passes through the sensor edges, clip it to the edges in u and v direction */
+  /* Step 3 - clip path to sensor edges (in u/v) */
   float t_min = 0.f, t_max = 1.f;
   std::tie(t_min, t_max) = ComputePathClippingFactors(t_min, t_max, simHitEntryPos.x(), simHitPath.x(), m_sensorLength.at(0));
   std::tie(t_min, t_max) = ComputePathClippingFactors(t_min, t_max, simHitEntryPos.y(), simHitPath.y(), m_sensorLength.at(1));
+
   if (t_min != 0.f || t_max != 1.f) { // check if clipping is even necessary, for performance
-    hitInfo.setDebugFlag();
-    if (0. <= t_min && t_min <= t_max && t_max <= 1.) {
-      verbose() << " - Clipping simHitPath to sensor edges with factors t_min = " << t_min << ", t_max = " << t_max << ". PathLength changed to " << (t_max - t_min) * simHitPath.r() << " mm from " << simHitPath.r() << " mm" << endmsg;
-      
+
+    if (0. <= t_min && t_min < t_max && t_max <= 1.) {
+      /* valid clipping */
+
       simHitEntryPos = simHitEntryPos + t_min * simHitPath;
       simHitPath = (t_max - t_min) * simHitPath;
     } 
@@ -1385,18 +1392,12 @@ std::tuple<dd4hep::rec::Vector3D, dd4hep::rec::Vector3D> VTXdigi_Allpix2::Constr
   }
 
   /* if pathLength given by Geant4 is more than X% shorter than the length we calculate, shorten our calculated path accordingly. */
-  if (simHitPath.r() > m_pathLengthShorteningFactorGeant4 * hitInfo.simPathLength()) {
-    verbose() << " - Shortening simHitPath from " << simHitPath.r() << " mm to Geant4 pathLength of " << hitInfo.simPathLength() << " mm, because it's length is more than " << m_pathLengthShorteningFactorGeant4 << " of the Geant4 path length." << endmsg;
-    
-    hitInfo.setDebugFlag();
-    /* make sure the path stays as centered around the simHitPos as possible
-    * find out where the simHitPos lies on the current path:
-    * project (simHitPos - simHitEntryPos) onto simHitPath -> gives distance from entryPos to simHitPos along the path (or to the point on path closest to simHitPos)
-    * dotProduct (simHitPos-simHitEntryPos, simHitPath) = |simHitPos - simHitEntryPos| * |simHitPath| * cos(angle between them) */
+  if (simHitPath.r() > 1.05f * hitInfo.simPathLength()) {
+
     const float t_simHit = ( (hitPos.local - simHitEntryPos).dot(simHitPath) ) / ( simHitPath.r() * simHitPath.r() ); 
     
     /* clamp new path (centered at t_center) to [0,1] */
-    const float t_length_half = hitInfo.simPathLength() / simHitPath.r() / 2.f; // half-length of new path, in terms of t [0,1] on old path
+    const float t_length_half = 0.5f * hitInfo.simPathLength() / simHitPath.r(); // half-length of new path, in terms of t [0,1] on old path
     const float t_center = std::max(t_length_half, std::min(t_simHit, 1.f - t_length_half)); // center of new path, clamped to [t_length_half, 1 - t_length_half] while not exceeding [0,1]
 
     t_min = t_center - t_length_half;
@@ -1515,7 +1516,7 @@ void VTXdigi_Allpix2::AnalyseSharedCharge(const HitInfo& hitInfo, const HitPosit
       float pixelChargeMeasured = pixelChargeRaw + pixelChargeMatrix.GetNoise(i_u, i_v);
 
       if (pixelChargeMeasured < m_pixelThreshold) {
-        verbose() << "     - Pixel (" << i_u << ", " << i_v << ") received a measured/raw charge of " << pixelChargeMeasured << " / " << pixelChargeRaw << " e-. This is below threshold (" << m_pixelThreshold << " e-). Discarding pixel." << endmsg;
+        verbose() << "     - Pixel (" << i_u << ", " << i_v << ") received " << pixelChargeMeasured << " / " << pixelChargeRaw << " e- (measured / raw). Below threshold, discarding." << endmsg;
         continue;
       }
 
@@ -1523,7 +1524,7 @@ void VTXdigi_Allpix2::AnalyseSharedCharge(const HitInfo& hitInfo, const HitPosit
       dd4hep::rec::Vector3D pixelCenterLocal = ComputePixelCenter_Local(i_u, i_v, *hitInfo.simSurface());
       dd4hep::rec::Vector3D pixelCenterGlobal = TransformLocalToGlobal(pixelCenterLocal, hitInfo.cellID());
 
-      debug() << "     - Pixel (" << i_u << ", " << i_v << ") at (" << pixelCenterLocal.x() << ", " << pixelCenterLocal.y() << ", " << pixelCenterLocal[2] << ") mm received a measured/raw charge of " << pixelChargeMeasured << "/" << pixelChargeRaw << " e-, center at global position " << pixelCenterGlobal[0] << " mm, " << pixelCenterGlobal[1] << " mm, " << pixelCenterGlobal[2] << " mm" << endmsg;
+      debug() << "     - Pixel (" << i_u << ", " << i_v << ") received " << pixelChargeMeasured << "/" << pixelChargeRaw << " e- (measured/raw)" << endmsg;
       CreateDigiHit(simHit, digiHits, digiHitsLinks, pixelCenterGlobal, pixelChargeMeasured);
       ++m_counter_digiHitsCreated;
 
