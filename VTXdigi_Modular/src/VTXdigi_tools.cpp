@@ -223,8 +223,8 @@ HitMap::HitMap(std::pair<size_t, size_t> pixelCount) : m_pixCount(pixelCount) {
 }
 
 void HitMap::FillCharge(std::pair<int, int> i_uv, float charge, const SimHitWrapper& simHitWrapper) {
-  if (charge < 1.e-3f)
-    return; // skip very small charge additions for performance (this is NECESSARY)
+  if (charge < 1.e-6f)
+    return; // skip very small charge additions for performance (this is NECESSARY).
   if (_OutOfBounds(i_uv)) [[unlikely]]
     throw std::runtime_error("HitMap::FillCharge: pixel i_u or i_v ( " + std::to_string(i_uv.first) + ", " + std::to_string(i_uv.second) + ") out of range");
 
@@ -245,8 +245,9 @@ void HitMap::ApplyThreshold(const float threshold) {
   auto hitIter = m_pixels.begin();
 
   while (hitIter != m_pixels.end()) {
-    if (hitIter->second.charge < threshold)
+    if (hitIter->second.charge < threshold) {
       hitIter = m_pixels.erase(hitIter); // erase returns the iterator to the next element, so this is safe to do while iterating
+    }
     else
       ++hitIter;
   }
@@ -345,7 +346,13 @@ std::vector<Cluster> Clusterize_NextNeighbors(const HitMap& hitMap) {
       queue.pop();
       
       /* Add pixl to cluster */
+
       const Pixel* pixel = &(pixelMap.at(current_uv)); // get pixel pointer from map
+
+      // if ((pixel->simHits).size()>2) {
+      //   continue;
+      // }
+
       clusters.back().pixels.push_back(pixel);
       clusters.back().charge += pixel->charge;
       for (const SimHitWrapper* simHitWrapper : pixel->simHits) {
@@ -362,6 +369,7 @@ std::vector<Cluster> Clusterize_NextNeighbors(const HitMap& hitMap) {
       }
 
     } // loop over queue
+
   } // loop over cluster-seeds
   return clusters;
 }

@@ -52,25 +52,7 @@ Path::Path(const SimHitWrapper& simHit, const TGeoHMatrix& trafoMatrix, const VT
   const float scaleFactor_entry = shiftDist_w / travel.z();
   entry = simPos - scaleFactor_entry * travel;
 
-  /* Step 3 -check that path is not much longer than the length it had in Geant4 */
-  lengthG4 = simHit.hitPtr()->getPathLength();
-  if (travel.r() > 1.05f * lengthG4) {
-    digitizer.debug() << "       - Shortening path length from " << static_cast<int>(travel.r()*1000) << " um to " << static_cast<int>(lengthG4*1000) << " um (the respective path length in Geant4)." << endmsg;
-
-    /* make sure the path stays centred around the simTrackerHit position */
-    const float t_simPos = ( (simPos - entry).dot(travel) ) / (travel.r() * travel.r());
-
-    const float t_length_halved = 0.5f * lengthG4 / travel.r(); // length of the new path in terms of t [0,1] on old path, halved
-    const float t_center = std::max(t_length_halved, std::min(t_simPos, 1.f - t_length_halved)); // center of new path clamped to [t_length_half, 1 - t_length_half] while not exceeding [0,1]
-
-    const float t_min = t_center - t_length_halved;
-    const float t_max = t_center + t_length_halved;
-
-    entry = entry + t_min * travel;
-    travel = (t_max - t_min) * travel;
-  }
-
-  /* Step 4 - clip path to sensor edges (in u/v) */
+  /* Step 3 - clip path to sensor edges (in u/v) */
   std::pair<float, float> t = std::make_pair(0.f, 1.f); // parametrize path as entry + t*travel; t in [0,1]
   t = ComputePathClippingFactors(t, entry.x(), travel.x(), digitizer.SensorDimensions().at(0));
   t = ComputePathClippingFactors(t, entry.y(), travel.y(), digitizer.SensorDimensions().at(1));
@@ -88,6 +70,24 @@ Path::Path(const SimHitWrapper& simHit, const TGeoHMatrix& trafoMatrix, const VT
       digitizer.debug() << " -> entry (" << entry.x() << ", " << entry.y() << ", " << entry.z() << ") mm, exit (" << entry.x() + travel.x() << ", " << entry.y() + travel.y() << ", " << entry.z() + travel.z() << ") mm, sensor dim. (+-" << digitizer.SensorDimensions().at(0)/2 << ", +-" << digitizer.SensorDimensions().at(1)/2 << ") mm" << endmsg;
       digitizer.debug() << " -> Path length " << static_cast<int>(travel.r()*1000) << " um, in G4 " << static_cast<int>(simHit.hitPtr()->getPathLength()*1000) << " um" << endmsg;
     }
+  }
+
+  /* Step 4 -check that path is not much longer than the length it had in Geant4 */
+  lengthG4 = simHit.hitPtr()->getPathLength();
+  if (travel.r() > 1.05f * lengthG4) {
+    digitizer.debug() << "       - Shortening path length from " << static_cast<int>(travel.r()*1000) << " um to " << static_cast<int>(lengthG4*1000) << " um (the respective path length in Geant4)." << endmsg;
+
+    /* make sure the path stays centred around the simTrackerHit position */
+    const float t_simPos = ( (simPos - entry).dot(travel) ) / (travel.r() * travel.r());
+
+    const float t_length_halved = 0.5f * lengthG4 / travel.r(); // length of the new path in terms of t [0,1] on old path, halved
+    const float t_center = std::max(t_length_halved, std::min(t_simPos, 1.f - t_length_halved)); // center of new path clamped to [t_length_half, 1 - t_length_half] while not exceeding [0,1]
+
+    const float t_min = t_center - t_length_halved;
+    const float t_max = t_center + t_length_halved;
+
+    entry = entry + t_min * travel;
+    travel = (t_max - t_min) * travel;
   }
 
   length = travel.r();
@@ -342,6 +342,8 @@ void ChargeCollector_LUT::FillHit(const SimHitWrapper& simHit, HitMap& hitMap, c
   Index_segment nextSeg, seg = ComputeSegmentIndices(0, stepCount, path);
   int segmentsInBin = 1;
 
+  std::unordered_map<std::pair<int, int>, float, Hash_PairInt> chargeAddedToMap;
+
   /* TODO: currently, DistributeSegmentCharge is THE bottleneck. Optimise this by collecting all entries from each vector in a local size x size matrix, and copy that to m_LUT once all segments in a pixel have been filled. */
 
   for (int i_next = 1; i_next < stepCount; ++i_next) {
@@ -354,7 +356,10 @@ void ChargeCollector_LUT::FillHit(const SimHitWrapper& simHit, HitMap& hitMap, c
       continue;
     } 
     else {
-      DistributeSegmentCharge(hitMap, seg, segmentCharge, segmentsInBin, simHit); 
+      auto chargeAddedToMap_single = DistributeSegmentCharge(hitMap, seg, segmentCharge, segmentsInBin, simHit); 
+      for (const auto& [key, value] : chargeAddedToMap_single) {
+        chargeAddedToMap[key] += value;
+      }
       seg = nextSeg;
       segmentsInBin = 1;
     }
@@ -362,7 +367,15 @@ void ChargeCollector_LUT::FillHit(const SimHitWrapper& simHit, HitMap& hitMap, c
 
   m_digitizer.FillHistograms_fromChargeCollector_perSimHit(path.length, path.lengthG4);
 
-  DistributeSegmentCharge(hitMap, seg, segmentCharge, segmentsInBin, simHit);
+  auto chargeAddedToMap_single = DistributeSegmentCharge(hitMap, seg, segmentCharge, segmentsInBin, simHit); 
+  for (const auto& [key, value] : chargeAddedToMap_single) {
+    chargeAddedToMap[key] += value;
+  }
+
+  for (const auto& [key, value] : chargeAddedToMap) {
+    if (value > 100.f)
+      m_digitizer.debug() << "       - Pixel (" << key.first << ", " << key.second << "): received = " << value << " e." << endmsg;
+  }
 }
 
 Index_segment ChargeCollector_LUT::ComputeSegmentIndices(const int step, const int stepCount, const Path& path) const {
@@ -380,7 +393,9 @@ Index_segment ChargeCollector_LUT::ComputeSegmentIndices(const int step, const i
   return seg;
 }
 
-void ChargeCollector_LUT::DistributeSegmentCharge(HitMap& hitMap, const Index_segment& i_seg, const float segmentCharge, const int segmentsInBin, const SimHitWrapper& simHit) const {
+std::unordered_map<std::pair<int, int>, float, Hash_PairInt> ChargeCollector_LUT::DistributeSegmentCharge(HitMap& hitMap, const Index_segment& i_seg, const float segmentCharge, const int segmentsInBin, const SimHitWrapper& simHit) const {
+  std::unordered_map<std::pair<int, int>, float, Hash_PairInt> chargeAddedToMap; // for debugging and testing: stores the charge that we add to each pixel in this function call, so we can check it against the LUT values and the segment charge. key is pixel indices i_uv, value is charge added to that pixel from this segment
+
 
   /* cache things, this is the hottest loop */
   const int lutSize = m_LUT.GetSize();
@@ -403,9 +418,12 @@ void ChargeCollector_LUT::DistributeSegmentCharge(HitMap& hitMap, const Index_se
       const int i_v = i_v_origin + row;
         
       const float chargeToAdd = m_LUT.GetWeight(i_seg.j, col, row) * charge;
+
+      chargeAddedToMap[{i_u, i_v}] += chargeToAdd;
       hitMap.FillCharge({i_u, i_v}, chargeToAdd, simHit);
     }
   }
+  return chargeAddedToMap;
 }
 
 void ChargeCollector_LUT::MoveTruthPosition(const SimHitWrapper& simHit, const Path& path) const {

@@ -92,7 +92,8 @@ private:
   void FillHistograms_perSimHit(const VTXdigi_tools::SimHitWrapper& hit) const;
   void FillHistograms_perPixel(const dd4hep::DDSegmentation::CellID& cellID, const VTXdigi_tools::Pixel& pix, const std::pair<float, float> clusterPos_local) const;
   void FillHistograms_perDigiHit(const std::unordered_set<const VTXdigi_tools::SimHitWrapper*>& simHits, const edm4hep::TrackerHitPlane& digiHit, const TGeoHMatrix& trafoMatrix, const int clusterSize) const;
-  
+  void PrintCountersSummary() const;
+
   /* -- Properties -- */
 
   const std::string m_undefinedString = "UNDEFINED";
@@ -117,12 +118,14 @@ private:
   Gaudi::Property<float> m_smearing_charge{this, "ChargeSmearing", 0.0f, "Gaussian smearing to be applied to a pixels collected charge (in e-). Applied after charge collection but before thresholding. If 0, no noise is applied. Quadratically add pixel noise and threshold smearing if necessary."};
   Gaudi::Property<float> m_smearing_time{this, "TimeSmearing", 0.0f, "Gaussian smearing to be applied to a pixels time (in ns). Applied to the digiHits time stamp. If 0, no time smearing is applied."};
   
-  Gaudi::Property<bool> m_debugHistograms{this, "DebugHistograms", false, "Flag to create and fill debug histograms. Not recommended for multithreading, might lead to crashes. Default is false."};
-  Gaudi::Property<int> m_infoPrintInterval{this, "InfoPrintInterval", 100, "Interval for printing information during processing."};
-
   /* LUT */
   Gaudi::Property<std::string> m_LUT_FileName{this, "LookupTableFile", "", "File to load the lookup table from. Must be given if ChargeCollectionMethod is set to \"LookupTable\"."};
   Gaudi::Property<float> m_LUT_stepLength{this, "LookupTableSegmentStepLength", 0.0004f, "Length of the segments that a particle path through the sensor is split into. The deposited charge is distributed evenly over the segments, and each segments charge is distributed according to the in-pixel bin the segment center falls into. In mm. Defaults to 0.0004 mm."};
+
+  /* Debugging */
+  Gaudi::Property<bool> m_debugHistograms{this, "DebugHistograms", true, "Whether to produce debug histograms."};
+  Gaudi::Property<int> m_infoPrintInterval{this, "InfoPrintInterval", 1, "Interval (in number of events) at which to print info messages about the event processing progress."};
+
   
   /* -- Services, geometry variables -- */
   
@@ -157,9 +160,19 @@ private:
   mutable Gaudi::Accumulators::Counter<> m_counter_eventsRead{this, "Events read"};
   mutable Gaudi::Accumulators::Counter<> m_counter_eventsRejected_noSimHits{this, "Events rejected (no simHits)"};
   mutable Gaudi::Accumulators::Counter<> m_counter_eventsAccepted{this, "Events accepted"};
+  
   mutable Gaudi::Accumulators::Counter<> m_counter_simHitsRead{this, "SimTrackerHits read"};
   mutable Gaudi::Accumulators::Counter<> m_counter_simHitsRejected_LayerNotToBeDigitized{this, "SimTrackerHits rejected (layer not to be digitized)"};
   mutable Gaudi::Accumulators::Counter<> m_counter_simHitsAccepted{this, "SimTrackerHits accepted"};
+  
+  mutable Gaudi::Accumulators::Counter<> m_counter_pixelHitsCreated{this, "Pixel hits produced"};
+  mutable Gaudi::Accumulators::Counter<> m_counter_pixelHitsAccepted{this, "Pixel hits accepted (after noise & thr)"};
+
+  mutable Gaudi::Accumulators::Counter<> m_counter_clustersCreated{this, "Clusters created"};
+  mutable Gaudi::Accumulators::Counter<> m_counter_digiHitsCreated{this, "Digi hits created"};
+
+
+
 
   /* -- Histograms -- */
 

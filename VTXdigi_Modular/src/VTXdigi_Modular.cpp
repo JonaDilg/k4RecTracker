@@ -63,6 +63,9 @@ StatusCode VTXdigi_Modular::initialize() {
 
 StatusCode VTXdigi_Modular::finalize() {
   info() << "FINALIZING VTXdigi_Modular..." << endmsg;
+
+  PrintCountersSummary();
+
   debug() << " - finalized successfully." << endmsg;
   return StatusCode::SUCCESS;
 } 
@@ -92,6 +95,8 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
   auto digiHitLinks = edm4hep::TrackerHitSimTrackerHitLinkCollection();
   std::vector<VTXdigi_tools::SimHitWrapper> hitsSensor;
   
+  int totalPixelHits = 0;
+
   /* loop over sensors */
   for (const auto& [cellID, simHits] : sensorSimHits) {
     debug() << "   - Processing sensor with cellID " << cellID << " (layer " << simHits.back().layer() << "). Has " << simHits.size() << " simHits." << endmsg;
@@ -112,18 +117,32 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
         FillHistograms_perSimHit(simHit);
     }
 
-    
+    for (int i = 0; i < hitMap.GetTotalPixelsWithCharge(); ++i) {
+      ++m_counter_pixelHitsCreated;
+    }
+
     if (m_smearing_charge.value() > 0.f) 
       hitMap.ApplyChargeSmearing(m_rndm_charge);
     if (m_threshold.value() > 0.f)
       hitMap.ApplyThreshold(m_threshold.value());
 
+    for (int i = 0; i < hitMap.GetTotalPixelsWithCharge(); ++i) {
+      ++m_counter_pixelHitsAccepted;
+    }
+
+    totalPixelHits += hitMap.GetTotalPixelsWithCharge();
+
     std::vector<VTXdigi_tools::Cluster> clusters = Clusterize(hitMap);
+
+    for (size_t i = 0; i < clusters.size(); ++i) {
+      ++m_counter_clustersCreated;
+    }
 
     CreateDigiHits(digiHits, digiHitLinks, cellID, trafoMatrix, clusters);
   } /* loop over sensors */
   
-  debug() << " - Finished digitization. Created " << digiHits.size() << " digiHits from " << simTrackerHits.size() << " simTrackerHits." << endmsg;
+  info() << " - Pixels with charge: " << totalPixelHits << endmsg;
+  info() << " - Digihits:           " << digiHits.size() << endmsg;
   return std::make_tuple(std::move(digiHits), std::move(digiHitLinks));
 } // operator()
 
@@ -433,7 +452,7 @@ void VTXdigi_Modular::InitHistograms() {
     -0.5f,
     static_cast<float>(m_pixelCount.second+0.5)};
 
-  Gaudi::Accumulators::Axis<float> axis_pathLength{500, 0.f, m_sensorThickness*1000.f*10.f};
+  Gaudi::Accumulators::Axis<float> axis_pathLength{600, 0.f, 300.f};
     
   /* Fill histograms per layer */
   for (int layer : m_layers.value()) {
@@ -749,6 +768,7 @@ std::vector<VTXdigi_tools::Cluster> VTXdigi_Modular::Clusterize(const VTXdigi_to
 
   if (m_clusterize.value()) {
     debug() << "     - Clusterizing " << hitMap.Hits().size() << " hits with a total charge of " << hitMap.GetTotalCharge() << " e." << endmsg;
+
     return VTXdigi_tools::Clusterize_NextNeighbors(hitMap);
   }
   else {
@@ -775,6 +795,7 @@ void VTXdigi_Modular::CreateDigiHits(edm4hep::TrackerHitPlaneCollection& digiHit
     debug() << "     - Found cluster with " << cluster.pixels.size() << " pixels, charge " << cluster.charge << ", center at (" << pos_index.first << ", " << pos_index.second << "). Has " << cluster.simHits.size() << " contributing simHits." << endmsg;
     
     edm4hep::MutableTrackerHitPlane digiHit = digiHits.create();
+    ++m_counter_digiHitsCreated;
     
     float timeStamp = 0.f;      
     for (const auto& simHit : cluster.simHits) {
@@ -905,5 +926,30 @@ void VTXdigi_Modular::FillHistograms_fromChargeCollector_perSimHit(const float p
 // hist1d_digiHitsPerSimHit,
 // hist2d_clusterSize_vs_module_z,
 
+void VTXdigi_Modular::PrintCountersSummary() const {
+  const int colWidths[] = {65, 10};  
+  info() << " Counters summary: " << endmsg;
+  info() << " | " << std::setw(colWidths[0]) << std::left << "Events read"
+         << " | " << std::setw(colWidths[1]) << std::right << m_counter_eventsRead.value() << " |" << endmsg;
+  info() << " | " << std::setw(colWidths[0]) << std::left << "Events rejected (no simHits)"
+         << " | " << std::setw(colWidths[1]) << std::right << m_counter_eventsRejected_noSimHits.value() << " |" << endmsg;
+  info() << " | " << std::setw(colWidths[0]) << std::left << "Events accepted"
+         << " | " << std::setw(colWidths[1]) << std::right << m_counter_eventsAccepted.value() << " |" << endmsg;
 
+  info() << " | " << std::setw(colWidths[0]) << std::left << "SimTrackerHits read"
+         << " | " << std::setw(colWidths[1]) << std::right << m_counter_simHitsRead.value() << " |" << endmsg;
+  info() << " | " << std::setw(colWidths[0]) << std::left << "SimTrackerHits rejected (layer ignored)"
+         << " | " << std::setw(colWidths[1]) << std::right << m_counter_simHitsRejected_LayerNotToBeDigitized.value() << " |" << endmsg;
+  info() << " | " << std::setw(colWidths[0]) << std::left << "SimTrackerHits accepted"
+         << " | " << std::setw(colWidths[1]) << std::right << m_counter_simHitsAccepted.value() << " |" << endmsg;
+
+  info() << " | " << std::setw(colWidths[0]) << std::left << "Pixels that collected charge"
+         << " | " << std::setw(colWidths[1]) << std::right << m_counter_pixelHitsCreated.value() << " |" << endmsg;
+  info() << " | " << std::setw(colWidths[0]) << std::left << "Pixel hits accepted (after noise & threshold)"
+         << " | " << std::setw(colWidths[1]) << std::right 	<< m_counter_pixelHitsAccepted.value()	<<	" |"	<<	endmsg;
+  info()	<<	" | "	<<	std::setw(colWidths[0])	<<	std::left	<<	"Clusters started"
+        	<<	" | "	<<	std::setw(colWidths[1])	<<	std::right	<<	m_counter_clustersCreated.value()	<<	" |"	<<	endmsg;
+  info()	<<	" | "	<<	std::setw(colWidths[0])	<<	std::left	<<	"Digi hits created"
+         << " | " << std::setw(colWidths[1]) << std::right << m_counter_digiHitsCreated.value() << " |" << endmsg;
+}
 

@@ -104,7 +104,7 @@ private:
   Index_segment ComputeSegmentIndices(const int step, const int stepCount, const Path& path) const;
 
   /** @brief Fill charge into the hitmap, according to a in-pixel bin's charge sharing weights */
-  void DistributeSegmentCharge(HitMap& hitMap, const Index_segment& i_seg, const float charge, const int segmentsInBin, const SimHitWrapper& simHit) const;
+  std::unordered_map<std::pair<int, int>, float, Hash_PairInt> DistributeSegmentCharge(HitMap& hitMap, const Index_segment& i_seg, const float charge, const int segmentsInBin, const SimHitWrapper& simHit) const;
   
   /** @brief Move the truth position in the simHitWrapper along the computed path to the depleted region center (as defined by the digitizer Gaudi property) 
    * @note Only used for plotting the residuals, does not change the output collections in any way.
