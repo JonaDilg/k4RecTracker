@@ -18,8 +18,6 @@ namespace VTXdigi_tools {
 
 constexpr float kChargePerkeV = 273.97f; // in electrons, for silicon (1 eh-pair ~ 3.65 eV)
 
-using EtaFuncHist = std::vector<std::pair<float, float>>;
-
 /* -- SimHitWrapper -- */
 
 enum class MCParticleLevel {
@@ -118,25 +116,26 @@ std::array<std::array<int, 2>, 8> GetNeighbors(const std::array<int, 2>& i_uv);
 
 /* -- Eta correction -- */
 
-class EtaFunction {
-  const std::array<EtaFuncHist, 2> m_functions;
-  std::array<const unsigned int, 2> m_binCounts;
+/** @brief A class to represent the eta correction distributions
+ * @note The distribution may be derived for a given LUT
+ * @note Per LUT bin along the u (v) axis, the function encodes the center of gravity position of a cluster that would be caused by charges in this bin
+ * This implementation follows the idea of https://arxiv.org/pdf/2107.06600*/
+class EtaDistribution {
+  const std::array<std::vector<float>, 2> m_values;
 
 public:
-  EtaFunction(std::array<EtaFuncHist, 2> functions);
+  EtaDistribution(std::array<std::vector<float>, 2> values);
 
-  /** @brief Get the raw eta functions */
-  inline const std::array<EtaFuncHist, 2>& GetFunctions() const { return m_functions; }
-  /** @brief Get the number of bins */
-  inline const std::array<const unsigned int, 2>& GetBinCounts() const { return m_binCounts; }
-  /** @brief Get the number of bins along a axis (0 - u, 1 - v)*/
-  inline unsigned int GetNBins(int axis) const { return m_binCounts.at(axis); }
+  inline unsigned int GetNBins(const int axis) const { return m_values.at(axis).size(); };
+  inline std::array<unsigned int, 2> GetNBins() const { return {GetNBins(0), GetNBins(1)}; };
 
-  /** @brief Get the eta function value for a given axis and position along the axis t
-   * @note t in [0,1), goes from one pixel centre to the next */
-  float GetEta(unsigned int axis, float t) const;
-  /** @brief Get a pair of eta function values for a pair of positions along the axes [u,v] */
-  std::array<float, 2> GetEtas(std::array<float, 2> ts) const;
+  /** @brief Get the collection center of gravity along a axis for an in-pixel bin
+   * @returns CoG in terms of in-pixel coordinate t [-0.5, 0.5] */
+  float GetCollectionCoG_Bin(const int axis, const unsigned int bin) const;
+
+  // /** @brief Get the collection center of gravity for along a axis for an in-pixel position in terms of t [-.5, .5]
+  //  * @returns CoG in terms of in-pixel coordinate t [-0.5, 0.5] */
+  // float GetCollectionCoG_inPix(const int axis, const float t) const;
 };
 
 /* -- HitMap -- */

@@ -11,8 +11,6 @@ struct VTXdigi_Modular;
 
 namespace VTXdigi_tools {
 
-  using EtaFuncHist = std::vector<std::pair<float, float>>;
-
   class SimHitWrapper; // forward-declare things in include/VTXdigi_tools.h
   class HitMap;
 
@@ -21,11 +19,11 @@ public:
   virtual ~IChargeCollector() = default;
   virtual void FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix) const = 0;
 
-  /** @brief Compute the eta function values from the charge collector
-   * @return An optional pair containing the eta function values in u and v, or std::nullopt if not applicable in the selected implementation
-   * @note Uses a binning from pixel centre to pixel centre, same bin width in u and v as the LUT itself */
-  // this is to stop leaking LUT implementation details into the digitizer
-  virtual std::optional< std::array<EtaFuncHist, 2> > ComputeEtaFunction() const { return std::nullopt; }
+  /** @brief Compute the eta distribution values from the charge collector
+   * @return An optional array containing the eta distribution values in u and v, or std::nullopt if not applicable in the selected implementation
+   * @note For an even binning across a single pixel, the vector contains the charge collection centre of gravity for each bin
+   * @note Implemeted such to stop LUT implementation details from leaking into the digitizer */
+  virtual std::optional< std::array<std::vector<float>, 2> > ComputeEtaDistribution() const { return std::nullopt; }
 
   float GetChargeCollectionDepthCenter() const { return m_chargeCollectionDepthCenter; }
 

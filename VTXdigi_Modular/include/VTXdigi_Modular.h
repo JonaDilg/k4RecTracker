@@ -141,7 +141,7 @@ private:
   Gaudi::Property<std::string> m_LUT_FileName{this, "LookupTableFile", "", "File to load the lookup table from. Must be given if ChargeCollectionMethod is set to \"LookupTable\"."};
   Gaudi::Property<bool> m_LUT_ignorePitch{this, "LookupTableIgnorePitch", false, "Ignore the sensor thickness and pixel pitch values stored in the LUT file. Useful for slightly stretching/shrinking the LUT to fit curved sensors where the sensor length is not an integer multiple of the pixel pitch. If empty, the LUT file values are used."};
   Gaudi::Property<bool> m_LUT_shiftTruthPos{this, "LookupTableShiftTruthPosition", false, "Internally shift the truth position of the simHit. Only affects the output histograms, does not affect any collection. If turned to false, angled particle trajectories will bias the residual plots in case of LUT tables with uneven charge collection across the sensor thickness."};
-  Gaudi::Property<bool> m_LUT_extractEtaFunction{this, "LookupTableExtractEtaFunction", false, "Extract the eta function from the LUT file. Only used if ChargeCollectionMethod is set to \"LookupTable\"."};
+  Gaudi::Property<bool> m_LUT_extractEtaDistribution{this, "LookupTableExtractEtaDistribution", false, "Extract the eta distribution from the LUT file. Only used if ChargeCollectionMethod is set to \"LookupTable\"."};
 
   /* -- Services, geometry variables -- */
 
@@ -157,7 +157,7 @@ private:
   /* -- Member variables -- */
 
   std::unique_ptr<VTXdigi_tools::IChargeCollector> m_chargeCollector = nullptr;
-  std::optional<VTXdigi_tools::EtaFunction> m_etaFunction = std::nullopt;
+  std::optional<VTXdigi_tools::EtaDistribution> m_etaDistribution = std::nullopt;
 
   std::array<size_t, 2> m_pixelCount = {0, 0};
   std::array<float, 2> m_pixelPitch = {0.0f, 0.0f};
@@ -329,10 +329,10 @@ private:
   > m_hist1dglobal;
 
   enum {
-    histProfile1dGlobal_etaFunction_u,
-    histProfile1dGlobal_etaFunction_v,
-    histProfile1dGlobal_etaDistribution_u,
-    histProfile1dGlobal_etaDistribution_v,
+    histProfile1dGlobal_etaDistribution_derived_u,
+    histProfile1dGlobal_etaDistribution_derived_v,
+    histProfile1dGlobal_etaDistribution_measured_u,
+    histProfile1dGlobal_etaDistribution_measured_v,
     histProfile1dGlobalArrayLen
   };
   std::array<

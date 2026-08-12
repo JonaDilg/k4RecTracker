@@ -27,14 +27,18 @@ StatusCode VTXdigi_Modular::initialize() {
   verbose() << "Initializing charge collection method: " << m_chargeCollectionMethod.value() << endmsg;
   m_chargeCollector = VTXdigi_tools::CreateChargeCollector(*this, m_chargeCollectionMethod);
 
-  if (m_LUT_extractEtaFunction.value()) {
-    if (auto etaFunction = m_chargeCollector->ComputeEtaFunction()) {
-      m_etaFunction.emplace(std::move(*etaFunction)); // there are no copy-constructors, this is the
-      info() << " - Extracted eta function from charge collector. It has " << m_etaFunction->GetNBins(0) << " bins in u and " << m_etaFunction->GetNBins(1) << " bins in v." << endmsg;
-      if (!m_etaFunction)
-        error() << "Failed to set m_etaFunction." << endmsg;
+  if (m_LUT_extractEtaDistribution.value()) {
+    debug() << " - Extracting eta distribution from charge collector..." << endmsg;
+    auto etaDistrib = m_chargeCollector->ComputeEtaDistribution();
+
+    if (etaDistrib) {
+      debug() << "   - Found eta distribution" << endmsg;
+      m_etaDistribution.emplace(std::move(*etaDistrib)); // there is no copy-constructor
+      info() << " - Extracted eta distribution from charge collector. It has " << m_etaDistribution->GetNBins(0) << " bins in u and " << m_etaDistribution->GetNBins(1) << " bins in v." << endmsg;
+      if (!m_etaDistribution)
+        error() << "Failed to set m_etaDistribution." << endmsg;
       else
-        debug() << "Successfully set m_etaFunction." << endmsg;
+        debug() << "Successfully set m_etaDistribution." << endmsg;
     }
   }
 
@@ -1130,53 +1134,48 @@ void VTXdigi_Modular::InitHistograms() {
     }
   );
 
-  if (m_etaFunction) {
+  if (m_etaDistribution) {
     debug() << "Creating global histograms for eta function." << endmsg;
 
-    unsigned int nBins_u = 2*m_etaFunction.value().GetNBins(0);
-    unsigned int nBins_v = 2*m_etaFunction.value().GetNBins(1);
-    // doubling the bin-number is necessary to get correct binning from constant-width histograms, see all the comments on even/odd case in ChargeCollector_impl.cpp LookupTable::ComputeEtaFunction()
+    const std::array<unsigned int, 2> nBins = m_etaDistribution.value().GetNBins();
 
-    m_histProfile1dGlobal.at(histProfile1dGlobal_etaFunction_u).reset(
+    m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_derived_u).reset(
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
-        "Global/etaFunction_u",
+        "Global/etaDistribution_derived_u",
         "Eta function in u direction;u position (from pixel centre to the neighbor pixel's centre);Eta function value",
-        {nBins_u, 0.f, 1.f}
+        { nBins[0], -0.5f * m_pixelPitch.at(0) * 1000.f, 0.5f * m_pixelPitch.at(0) * 1000.f }
       }
     );
-    m_histProfile1dGlobal.at(histProfile1dGlobal_etaFunction_v).reset(
+    m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_derived_v).reset(
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
-        "Global/etaFunction_v",
+        "Global/etaDistribution_derived_v",
         "Eta function in v direction;v position (from pixel centre to the neighbor pixel's centre);Eta function value",
-        {nBins_v, 0.f, 1.f}
+        { nBins[1], -0.5f * m_pixelPitch.at(1) * 1000.f, 0.5f * m_pixelPitch.at(1) * 1000.f }
       }
     );
-
-    // directly fill the hists with the eta function
-    for (unsigned int i_bin=0; i_bin < nBins_u; ++i_bin) {
-      const float binCenter = 1.f / static_cast<float>(nBins_u) * (static_cast<float>(i_bin) + 0.5f);
-      (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaFunction_u))[ binCenter ] += m_etaFunction.value().GetEta(0, binCenter);
+    // directly fill the TProfiles with the eta distributions
+    for (unsigned int i_bin=0; i_bin<nBins[0]; ++i_bin) {
+      const float binCenter_local = (-0.5f + (static_cast<float>(i_bin)+0.5f)/static_cast<float>(nBins[0])) * m_pixelPitch.at(0)*1000.f;
+      const float binCollectionCoG_local = m_etaDistribution.value().GetCollectionCoG_Bin(0, i_bin) * m_pixelPitch.at(0)*1000.f;
+      (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_derived_u))[ binCenter_local ] += binCollectionCoG_local;
     }
-    for (unsigned int i_bin=0; i_bin < nBins_v; ++i_bin) {
-      const float binCenter = 1.f / static_cast<float>(nBins_v) * (static_cast<float>(i_bin) + 0.5f);
-      (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaFunction_v))[ binCenter ] += m_etaFunction.value().GetEta(1, binCenter);
+    for (unsigned int i_bin=0; i_bin<nBins[1]; ++i_bin) {
+      const float binCenter_local = (-0.5f + (static_cast<float>(i_bin)+0.5f)/static_cast<float>(nBins[1])) * m_pixelPitch.at(1)*1000.f;
+      const float binCollectionCoG_local = m_etaDistribution.value().GetCollectionCoG_Bin(1, i_bin) * m_pixelPitch.at(1)*1000.f;
+      (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_derived_v))[ binCenter_local ] += binCollectionCoG_local;
     }
-    debug() << "Filled eta function histograms with " << nBins_u << " bins in u and " << nBins_v << " bins in v." << endmsg;
-  }
-  else {
-    debug() << "No eta function provided, skipping creation of global histograms for eta function." << endmsg;
   }
 
-  m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_u).reset(
+  m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_measured_u).reset(
     new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
-      "Global/etaDistribution_u",
+      "Global/etaDistribution_measured_u",
       "Measured eta distribution in u direction (dependence of the in-pix reco position on the in-pix truth position) (only valid for single-sensor detector model in vacuum);in-pixel cluster centre of gravity in u for 2-pix clusters (um);in-pixel truth position in u (um)",
       axis_inpix_u
     }
   );
-  m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_v).reset(
+  m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_measured_v).reset(
     new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
-      "Global/etaDistribution_v",
+      "Global/etaDistribution_measured_v",
       "Measured eta distribution in v direction (dependence of the in-pix reco position on the in-pix truth position) (only valid for single-sensor detector model in vacuum);in-pixel cluster centre of gravity in v for 2-pix clusters (um);in-pixel truth position in v (um)",
       axis_inpix_v
     }
@@ -1466,12 +1465,12 @@ void VTXdigi_Modular::FillHistograms_perDigiHit(const VTXdigi_tools::Cluster& cl
       const dd4hep::rec::Vector3D pos_inPix = VTXdigi_tools::ComputeInPixelPos(pos_local, m_pixelPitch, m_sensorLength);
 
       if (cluster.GetSize(0) == 2) {
-        (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_u))[ simHitPos_inPix.x() * 1000.f ] += pos_inPix.x() * 1000.f; // convert to um
+        (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_measured_u))[ simHitPos_inPix.x() * 1000.f ] += pos_inPix.x() * 1000.f; // convert to um
         ++(*m_hist2dGlobal.at(hist2dGlobal_etaDistribution_u))[ {simHitPos_inPix.x() * 1000.f, pos_inPix.x() * 1000.f} ]; // convert to um
       }
 
       if (cluster.GetSize(1) == 2) {
-        (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_v))[ simHitPos_inPix.y() * 1000.f ] += pos_inPix.y() * 1000.f; // convert to um
+        (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_measured_v))[ simHitPos_inPix.y() * 1000.f ] += pos_inPix.y() * 1000.f; // convert to um
         ++(*m_hist2dGlobal.at(hist2dGlobal_etaDistribution_v))[ {simHitPos_inPix.y() * 1000.f, pos_inPix.y() * 1000.f} ]; // convert to um
       }
 

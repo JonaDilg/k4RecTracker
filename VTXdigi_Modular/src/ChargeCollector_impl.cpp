@@ -378,90 +378,68 @@ int LookupTable::FindIndex (const Index_inPix& j, const int col, const int row) 
   return index_matrix * m_matrixSize * m_matrixSize + index_element;
 }
 
-std::array<EtaFuncHist, 2> LookupTable::ComputeEtaFunction() const {
-  /* compute the eta function by projecting the LUT (binning in u,v,w) onto the u- and v-axes
-    eta(t) : [0,1) -> [0,1]
+std::array<std::vector<float>, 2> LookupTable::ComputeEtaDistribution() const {
 
-  This is a bit complicated because the eta-binning is shifted by half a pixel wrt. the LUT-binning along a given axis
-    - For even bin numbers: the bins map 1-to-1 (+ the shift), easy case
-    - For odd bin numbers: the bins are shifted by half a bin.
-      Force the bin edges to line up via unequal bin width:
-      the first and last bin of the eta function are only half as wide for odd bin counts. */
+  // for each bin along the u/v axis, compute the centre of gravity of a cluster that is formed by charges deposited evenly across this slice. This is used to compute the eta distribution for charge sharing.
+  std::array<std::vector<float>, 2> etaDistributions;
 
-  const unsigned int n_bins_u = (m_binCount.at(0) % 2 == 0) ? m_binCount.at(0) : m_binCount.at(0) + 1; // if odd number of bins, add one
-  EtaFuncHist function_u(n_bins_u); // binned eta function: pair<bin lower edge, bin eta value>
+  // loop over bins in the u/v axis
+  for (int i_axis = 0; i_axis < 2; ++i_axis) {
+    std::cout << "Computing eta distribution for axis " << i_axis << std::endl;
 
-  // loop along u axis (in terms of eta binning)
-  for (int i_t=0; i_t < m_binCount.at(0); ++i_t) {
+    const int n_bins = m_binCount[i_axis];
+    const int i_otherAxis = (i_axis == 0) ? 1 : 0;
+    const int n_bins_otherAxis = m_binCount[i_otherAxis];
 
-    // assemble the LUT bin index i_u corresponding to this eta bin i_t
-    // this works for even and odd bin counts.
-    // for odd case: the last bin is never reached. fix that later.
-    int i_u = (i_t + m_binCount.at(0)/2) % m_binCount.at(0);
+    std::vector<float> binCollectionCoG(n_bins, 0.f);
 
-    // now find the lower edge of the eta bin in terms of t
-    // for odd case: the first bin edge is negative. fix that later.
-    float t = static_cast<float>(i_t) / static_cast<float>(m_binCount.at(0));
-    if (m_binCount.at(0) % 2 == 1) {
-      t -= 0.5f / static_cast<float>(m_binCount.at(0));
-    }
+    // loop over slices through the LUT along the axis (ie. loop over bins)
+    for (int i_bin_axis = 0; i_bin_axis < n_bins; ++i_bin_axis) {
+      // per slice: compute the centre of gravity along the axis of a cluster that is formed by charges deposited evenly across this slice
 
-    // we always use two bins of the 5x5 matrix to compute the eta function:
-    // the two pixel in between which the charge is deposited.
-    // this changes depending on whether the charge is deposited left or right of the pixel centre
-    // for odd case: the central bin is an outlier, because we SHOULD use it twice (once for left, once for right). Again, fix this later
-    int col_leftPix, col_rightPix;
-    if (i_u - m_binCount.at(0)/2 < 0) {
-      col_leftPix = m_matrixSize_half-1;
-      col_rightPix = m_matrixSize_half;
-    }
-    else {
-      col_leftPix = m_matrixSize_half;
-      col_rightPix = m_matrixSize_half+1;
-    }
+      std::vector<float> projectedMatrix(m_matrixSize, 0.f);
 
-    // finally: sum up charge across this slice of the LUT (with fixed i_u)
-    float leftPix = 0.f, rightPix = 0.f;
-    for (int i_v=0; i_v < m_binCount.at(1); ++i_v) {
-      for (int i_w=0; i_w < m_binCount.at(2); ++i_w) {
-        leftPix += GetWeight({i_u, i_v, i_w}, col_leftPix, m_matrixSize_half);
-        rightPix += GetWeight({i_u, i_v, i_w}, col_rightPix, m_matrixSize_half);
+      // loop over all bins in this slice along the axis
+      for (int i_bin_otherAxis = 0; i_bin_otherAxis < n_bins_otherAxis; ++i_bin_otherAxis) {\
+        for (int i_w = 0; i_w < m_binCount.at(2); ++i_w) {
+          // loop over the matrix for this in-pix bin and project it onto the axis of interest
+          for (int i = 0; i < m_matrixSize; ++i) {
+            for (int j = 0; j < m_matrixSize; ++j) {
+              int i_u, i_v, col, row;
+              if (i_axis == 0){
+                i_u = i_bin_axis;
+                i_v = i_bin_otherAxis;
+                col = i;
+                row = j;
+              }
+              else {
+                i_u = i_bin_otherAxis;
+                i_v = i_bin_axis;
+                col = j;
+                row = i;
+              }
+              projectedMatrix[i] += GetWeight({i_u, i_v, i_w}, col, row);
+            }
+          }
+        }
       }
-    }
-    float eta = rightPix / (leftPix + rightPix);
-    function_u.at(i_t) = std::make_pair(t, eta);
-  }
 
-  // all the promised fixes for odd bin counts
-  if (m_binCount.at(0) % 2 == 1) {
-    // fix the bin edges
-    function_u.at(n_bins_u).first = function_u.at(0).first + 1.f;
-    function_u.at(0).first = 0.f;
-
-    // the last bin was never reached.
-    int col_leftPix = m_matrixSize_half;
-    int col_rightPix = m_matrixSize_half-1;
-
-    float leftPix = 0, rightPix = 0;
-
-    int i_u = m_binCount.at(0)/2; // corresponds to the central bin of the LUT. odd integer division rounds down.
-    for (int i_v=0; i_v < m_binCount.at(1); ++i_v) {
-      for (int i_w=0; i_w < m_binCount.at(2); ++i_w) {
-        leftPix += GetWeight({i_u, i_v, i_w}, col_leftPix, m_matrixSize_half);
-        rightPix += GetWeight({i_u, i_v, i_w}, col_rightPix, m_matrixSize_half);
+      float pos=0.f, pos_weights=0.f;
+      for (int i=0; i<m_matrixSize; ++i) {
+        pos += static_cast<float>(i-2) * projectedMatrix[i];
+        pos_weights += projectedMatrix[i];
       }
-    }
-    float eta = rightPix / (leftPix + rightPix);
-    function_u.at(n_bins_u).second = eta;
-  } // odd-case fixes
+      pos /= pos_weights; // normalise to get center of gravity
 
-  // TODO: do this for v as well.
+      std::cout << "emplacing eta distribution value at axis " << i_axis << ", bin " << i_bin_axis << ": " << pos << std::endl;
+      etaDistributions.at(i_axis).emplace_back(pos);
+    } // loop over bins along axis
+  } // u/v axis
 
-  const unsigned int n_bins_v = (m_binCount.at(1) % 2 == 0) ? m_binCount.at(1) : m_binCount.at(1) + 1;
-  EtaFuncHist function_v(n_bins_v);
-
-  return std::array<EtaFuncHist, 2>({function_u, function_v});
+  return etaDistributions;
 }
+
+
 
 ChargeCollector_LUT::ChargeCollector_LUT(const VTXdigi_Modular& digitizer) : IChargeCollector(digitizer),
   m_LUT(digitizer.LutFileName(), digitizer),
