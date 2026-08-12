@@ -18,6 +18,8 @@ namespace VTXdigi_tools {
 
 constexpr float kChargePerkeV = 273.97f; // in electrons, for silicon (1 eh-pair ~ 3.65 eV)
 
+using EtaFuncHist = std::vector<std::pair<float, float>>;
+
 /* -- SimHitWrapper -- */
 
 enum class MCParticleLevel {
@@ -78,9 +80,9 @@ void swap(SimHitWrapper& a, SimHitWrapper& b) noexcept;
 struct Pixel {
   float charge;
   std::unordered_set<const SimHitWrapper*> simHits;
-  std::pair<int, int> index; // This info is saved in (a) the map key, and (b) here inside the Pixel object. This is inefficient. But it makes the code a bit nicer not having to pass the index around separately.
+  std::array<int, 2> index; // This info is saved in (a) the map key, and (b) here inside the Pixel object. This is inefficient. But it makes the code a bit nicer not having to pass the index around separately.
 
-  Pixel(std::pair<int, int> pix) : charge(0.f), index(pix) {
+  Pixel(std::array<int, 2> pix) : charge(0.f), index(pix) {
     simHits.reserve(2); // avoid too many reallocations, will rarely see more than 2 simTrackerHits contributing to the same pixel
   }
   Pixel() : charge(0.f), index({-1, -1}) {
@@ -100,33 +102,33 @@ struct Cluster {
   int GetSize(const int axis) const; // axis = 0 for u, 1 for v.
 
   /** @brief Compute the center position of a cluster via charge-weighed center of gravity in terms of pixel indices */
-  std::pair<float, float> ComputePos() const;
+  std::array<float, 2> ComputePos() const;
 
   /** @brief Compute the uncertainty of the cluster position via charge-weighed center of gravity in terms of pixel indices */
-  std::pair<float, float> ComputePosUncertainty_ChargeWeighted() const;
-  std::pair<float, float> ComputePosUncertainty_ChargeWeighted(const std::pair<float, float>& clusterPos) const;
+  std::array<float, 2> ComputePosUncertainty_ChargeWeighted() const;
+  std::array<float, 2> ComputePosUncertainty_ChargeWeighted(const std::array<float, 2>& clusterPos) const;
 
   /** @brief get the charge in the seed pixel (eg. pixel with the highest charge) */
   float GetSeedPixelCharge() const;
 };
 
 /** @brief Get the indices of all direct neighbors of a pixel */
-std::array<std::pair<int, int>, 4> GetDirectNeighbors(const std::pair<int, int>& i_uv);
-std::array<std::pair<int, int>, 8> GetNeighbors(const std::pair<int, int>& i_uv);
+std::array<std::array<int, 2>, 4> GetDirectNeighbors(const std::array<int, 2>& i_uv);
+std::array<std::array<int, 2>, 8> GetNeighbors(const std::array<int, 2>& i_uv);
 
 /* -- Eta correction -- */
 
 class EtaFunction {
-  const std::array< std::vector<std::pair<float, float>>,2> m_functions;
-  std::array<const unsigned int,2> m_binCounts;
+  const std::array<EtaFuncHist, 2> m_functions;
+  std::array<const unsigned int, 2> m_binCounts;
 
 public:
-  EtaFunction(std::array< std::vector<std::pair<float, float>>,2> functions);
+  EtaFunction(std::array<EtaFuncHist, 2> functions);
 
   /** @brief Get the raw eta functions */
-  inline const std::array< std::vector<std::pair<float, float>>,2>& GetFunctions() const { return m_functions; }
+  inline const std::array<EtaFuncHist, 2>& GetFunctions() const { return m_functions; }
   /** @brief Get the number of bins */
-  inline const std::array<const unsigned int,2>& GetBinCounts() const { return m_binCounts; }
+  inline const std::array<const unsigned int, 2>& GetBinCounts() const { return m_binCounts; }
   /** @brief Get the number of bins along a axis (0 - u, 1 - v)*/
   inline unsigned int GetNBins(int axis) const { return m_binCounts.at(axis); }
 
@@ -139,13 +141,13 @@ public:
 
 /* -- HitMap -- */
 
-struct Hash_PairInt {
-  size_t operator()(const std::pair<int,int>& i_uv) const noexcept {
-    return (static_cast<uint64_t>(i_uv.first) << 32) ^ static_cast<uint32_t>(i_uv.second);
+struct Hash_PixIndex {
+  size_t operator()(const std::array<int, 2>& i_uv) const noexcept {
+    return (static_cast<uint64_t>(i_uv[0]) << 32) ^ static_cast<uint32_t>(i_uv[1]);
   }
 };
 
-using PixelMap = std::unordered_map<std::pair<int, int>, Pixel, Hash_PairInt>;
+using PixelMap = std::unordered_map<std::array<int, 2>, Pixel, Hash_PixIndex>;
 
 /** @brief HitMap of all pixel hits on a sensor
  * @note uses a std::unordered_map to only store pixels that have charge, which is more memory efficient for large pixel counts and low occupancy. */
@@ -153,13 +155,13 @@ class HitMap {
   /* I tried implementing a vector that contains every pixel, but for large pixel counts this is very memory-inefficient. Instead, this class uses a std::map to only store pixels that have charge. This is more memory efficient for sparse hits, with O(1) simHit/sensor/event this is at least a factor 100 faster that the vector approach. Maybe not the case to ttbar run with O(0.1%) pixel occupancy. */
 
   PixelMap m_pixels; // hit pixels, stored by value
-  std::pair<size_t, size_t> m_pixCount; // size of the sensor in pixels
+  std::array<size_t, 2> m_pixCount; // size of the sensor in pixels
 
 public:
-  HitMap(std::pair<size_t, size_t> pixCount);
+  HitMap(std::array<size_t, 2> pixCount);
 
   /** @brief Add charge and a simHit to a pixel */
-  void FillCharge(std::pair<int, int> i_uv, float charge, const SimHitWrapper& simHitWrapper);
+  void FillCharge(std::array<int, 2> i_uv, float charge, const SimHitWrapper& simHitWrapper);
 
   /** @brief For each pixel with charge, vary the charge by an amount drawn from the supplied random generator */
   void ApplyChargeSmearing(const Rndm::Numbers& rndm_charge);
@@ -169,7 +171,7 @@ public:
   void ApplyThreshold(const float threshold, const Rndm::Numbers* rndm_threshold = nullptr);
 
   /** @brief Get one pixel's collected charge */
-  float GetCharge(std::pair<int, int> i_uv) const;
+  float GetCharge(std::array<int, 2> i_uv) const;
 
   /** @brief Get the total charge across all pixels */
   float GetTotalCharge() const;
@@ -191,7 +193,7 @@ public:
 
 private:
   /** @brief Returns true if the pixel is out of bounds */
-  inline bool _OutOfBounds(std::pair<int, int> i_uv) const;
+  inline bool _OutOfBounds(std::array<int, 2> i_uv) const;
 }; // class HitMap
 
 /* -- helpers -- */
@@ -238,30 +240,30 @@ float ComputeBinCenter(int i, float binX0, float binWidth);
 float ComputeBinCenter(int i, float binX0, float binX1, int binN);
 
 /** @brief Compute the pixel indices (i_u, i_v) for a given (local) position inside the sensor */
-std::pair<int, int> ComputePixelIndices(const dd4hep::rec::Vector3D& pos, const std::pair<float, float> pixelPitch, const std::pair<size_t, size_t> pixelCount);
+std::array<int, 2> ComputePixelIndices(const dd4hep::rec::Vector3D& pos, const std::array<float, 2> pixelPitch, const std::array<size_t, 2> pixelCount);
 
 /** @brief Compute the in-pixel indices (j_u, j_v, j_w) for a given (local) position inside the pixel and layer index
  *  @note Assumption: each layer has only 1 type if sensor */
-std::array<int, 3> ComputeInPixelIndices(const dd4hep::rec::Vector3D& pos, const std::array<int, 3>& binCount, const std::pair<float, float>& pixelPitch, const std::array<float, 3>& activeVolumeDimensions);
+std::array<int, 3> ComputeInPixelIndices(const dd4hep::rec::Vector3D& pos, const std::array<int, 3>& binCount, const std::array<float, 2>& pixelPitch, const std::array<float, 3>& activeVolumeDimensions);
 
 /** @brief Compute the center position of a given pixel (i_u,i_v) in sensor-local coordinates (u,v,w)
  * @note The w coordinate is set to depletedRegionDepthCenter. 0 for center, +25 for sensor surface, +20 for TPSCo 65nm maps. */
-dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::pair<int, int> pixelIndex, const std::pair<float, float> sensorLength,  const std::pair<float, float> pixelPitch, float depletedRegionDepthCenter);
+dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::array<int, 2> pixelIndex, const std::array<float, 2> sensorLength,  const std::array<float, 2> pixelPitch, float depletedRegionDepthCenter);
 /** @brief Compute the center position of a given pixel (i_u,i_v) in sensor-local coordinates (u,v,0) */
-dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::pair<int, int> pixelIndex, const std::pair<float, float> sensorLength, const std::pair<float, float> pixelPitch);
+dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::array<int, 2> pixelIndex, const std::array<float, 2> sensorLength, const std::array<float, 2> pixelPitch);
 
 /** @brief Compute the position of a given (pixel-)index (i_u,i_v) in sensor-local coordinates (u,v,0) .
  * @note index 0 indicates the center of the pixel, index -0.5 the lower edge and +0.5 the upper edge.
  * @note Does not check if the position is within the sensor bounds!
  * @note The w coordinate is set to depletedRegionDepthCenter. 0 for center, +25 for sensor surface, +20 for TPSCo 65nm maps. */
-dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::pair<float, float> index, const std::pair<float, float> sensorLength,  const std::pair<float, float> pixelPitch, float depletedRegionDepthCenter);
+dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::array<float, 2> index, const std::array<float, 2> sensorLength,  const std::array<float, 2> pixelPitch, float depletedRegionDepthCenter);
 /** @brief Compute the position of a given (pixel-)index (i_u,i_v) in sensor-local coordinates (u,v,0) .
  * @note index 0 indicates the center of the pixel, index -0.5 the lower edge and +0.5 the upper edge.
  * @note Does not check if the position is within the sensor bounds! */
-dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::pair<float, float> index, const std::pair<float, float> sensorLength, const std::pair<float, float> pixelPitch);
+dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::array<float, 2> index, const std::array<float, 2> sensorLength, const std::array<float, 2> pixelPitch);
 
 /** @brief Compute in-pixel position for a given local position (inside the sensor)
  * @note the coordinate system is centred at the pixel centre */
-dd4hep::rec::Vector3D ComputeInPixelPos(const dd4hep::rec::Vector3D& pos_local, const std::pair<float, float> pixelPitch, const std::pair<float, float>& sensorLength);
+dd4hep::rec::Vector3D ComputeInPixelPos(const dd4hep::rec::Vector3D& pos_local, const std::array<float, 2> pixelPitch, const std::array<float, 2>& sensorLength);
 
 } // namespace VTXdigi_tools

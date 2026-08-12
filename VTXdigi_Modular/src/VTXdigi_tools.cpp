@@ -166,25 +166,25 @@ float ComputeBinCenter(int i, float binX0, float binX1, int binN) {
   return ComputeBinCenter(i, binX0, binWidth);
 } // ComputeBinCenter()
 
-std::pair<int, int> ComputePixelIndices(const dd4hep::rec::Vector3D& pos, const std::pair<float, float> pixelPitch, const std::pair<size_t, size_t> pixelCount) {
-  const float length_u_half = 0.5 * pixelPitch.first * pixelCount.first;
+std::array<int, 2> ComputePixelIndices(const dd4hep::rec::Vector3D& pos, const std::array<float, 2> pixelPitch, const std::array<size_t, 2> pixelCount) {
+  const float length_u_half = 0.5 * pixelPitch[0] * pixelCount[0];
   int i_u = ComputeBinIndex(
     pos.x(),
     -length_u_half,
-    pixelPitch.first,
-    pixelCount.first);
+    pixelPitch[0],
+    pixelCount[0]);
 
-  const float length_v_half = 0.5 * pixelPitch.second * pixelCount.second;
+  const float length_v_half = 0.5 * pixelPitch[1] * pixelCount[1];
   int i_v = ComputeBinIndex(
     pos.y(),
     -length_v_half,
-    pixelPitch.second,
-    pixelCount.second);
+    pixelPitch[1],
+    pixelCount[1]);
 
   return {i_u, i_v};
 } // ComputePixelIndices()
 
-std::array<int, 3> ComputeInPixelIndices(const dd4hep::rec::Vector3D& pos, const std::array<int, 3>& binCount, const std::pair<float, float>& pixelPitch, const std::array<float, 3>& activeVolumeDimensions) {
+std::array<int, 3> ComputeInPixelIndices(const dd4hep::rec::Vector3D& pos, const std::array<int, 3>& binCount, const std::array<float, 2>& pixelPitch, const std::array<float, 3>& activeVolumeDimensions) {
   std::array<int, 3> indices;
 
   const float posShifted_u = pos.x() + 0.5 * activeVolumeDimensions[0]; // shift to [0, length_u]
@@ -192,9 +192,9 @@ std::array<int, 3> ComputeInPixelIndices(const dd4hep::rec::Vector3D& pos, const
     indices[0] = -1; // out of bounds
   }
   else {
-    float posInPixel_u = std::fmod(posShifted_u,  pixelPitch.first);
-    if (posInPixel_u < 0.0) posInPixel_u +=  pixelPitch.first; // ensure positive remainder
-    indices[0] = ComputeBinIndex(posInPixel_u, 0.0,  pixelPitch.first / binCount[0], binCount[0]);
+    float posInPixel_u = std::fmod(posShifted_u,  pixelPitch[0]);
+    if (posInPixel_u < 0.0) posInPixel_u +=  pixelPitch[0]; // ensure positive remainder
+    indices[0] = ComputeBinIndex(posInPixel_u, 0.0,  pixelPitch[0] / binCount[0], binCount[0]);
   }
 
   const float posShifted_v = pos.y() + 0.5 * activeVolumeDimensions[1];
@@ -202,9 +202,9 @@ std::array<int, 3> ComputeInPixelIndices(const dd4hep::rec::Vector3D& pos, const
     indices[1] = -1; // out of bounds
   }
   else {
-    float posInPixel_v = std::fmod(posShifted_v, pixelPitch.second);
-    if (posInPixel_v < 0.0) posInPixel_v += pixelPitch.second;
-    indices[1] = ComputeBinIndex(posInPixel_v, 0.0, pixelPitch.second / binCount[1], binCount[1]);
+    float posInPixel_v = std::fmod(posShifted_v, pixelPitch[1]);
+    if (posInPixel_v < 0.0) posInPixel_v += pixelPitch[1];
+    indices[1] = ComputeBinIndex(posInPixel_v, 0.0, pixelPitch[1] / binCount[1], binCount[1]);
   }
 
   // vertical (w) binning: shift to [0, thickness]
@@ -214,63 +214,63 @@ std::array<int, 3> ComputeInPixelIndices(const dd4hep::rec::Vector3D& pos, const
   return indices;
 } // ComputeInPixelIndices()
 
-dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::pair<int, int> pixelIndex, const std::pair<float, float> sensorLength,  const std::pair<float, float> pixelPitch, float depletedRegionDepthCenter) {
+dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::array<int, 2> pixelIndex, const std::array<float, 2> sensorLength,  const std::array<float, 2> pixelPitch, float depletedRegionDepthCenter) {
   /* returns the position of the center of pixel i_u, i_v in the local sensor frame */
 
-  float u = (static_cast<float>(pixelIndex.first) + 0.5f) * pixelPitch.first - 0.5f * sensorLength.first; // in mm
-  float v = (static_cast<float>(pixelIndex.second) + 0.5f) * pixelPitch.second - 0.5f * sensorLength.second;
+  float u = (static_cast<float>(pixelIndex[0]) + 0.5f) * pixelPitch[0] - 0.5f * sensorLength[0]; // in mm
+  float v = (static_cast<float>(pixelIndex[1]) + 0.5f) * pixelPitch[1] - 0.5f * sensorLength[1];
   float w = depletedRegionDepthCenter;
 
   return dd4hep::rec::Vector3D(u, v, w);
 }
 
-dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::pair<int, int> pixelIndex, const std::pair<float, float> sensorLength, const std::pair<float, float> pixelPitch) {
+dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::array<int, 2> pixelIndex, const std::array<float, 2> sensorLength, const std::array<float, 2> pixelPitch) {
   return ComputePosFromPixIndex_local(pixelIndex, sensorLength, pixelPitch, 0.f);
 }
 
-dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::pair<float, float> index, const std::pair<float, float> sensorLength,  const std::pair<float, float> pixelPitch, float depletedRegionDepthCenter) {
+dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::array<float, 2> index, const std::array<float, 2> sensorLength,  const std::array<float, 2> pixelPitch, float depletedRegionDepthCenter) {
   /* returns the position of the center of pixel i_u, i_v in the local sensor frame */
 
-  float u = (index.first + 0.5f) * pixelPitch.first - 0.5f * sensorLength.first; // in mm. Add 0.5*pixelPitch to shift from pixel edge to center, since index 0 is defined as the center of the pixel.
-  float v = (index.second + 0.5f) * pixelPitch.second - 0.5f * sensorLength.second;
+  float u = (index[0] + 0.5f) * pixelPitch[0] - 0.5f * sensorLength[0]; // in mm. Add 0.5*pixelPitch to shift from pixel edge to center, since index 0 is defined as the center of the pixel.
+  float v = (index[1] + 0.5f) * pixelPitch[1] - 0.5f * sensorLength[1];
   float w = depletedRegionDepthCenter;
 
   return dd4hep::rec::Vector3D(u, v, w);
 }
 
-dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::pair<float, float> index, const std::pair<float, float> sensorLength,  const std::pair<float, float> pixelPitch) {
+dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::array<float, 2> index, const std::array<float, 2> sensorLength,  const std::array<float, 2> pixelPitch) {
   return ComputePosFromPixIndex_local(index, sensorLength, pixelPitch, 0.f);
 }
 
-dd4hep::rec::Vector3D ComputeInPixelPos(const dd4hep::rec::Vector3D& pos_local, const std::pair<float, float> pixelPitch, const std::pair<float, float>& sensorLength) {
-  if (pos_local.x() < -0.5 * sensorLength.first || pos_local.x() > 0.5 * sensorLength.first)
+dd4hep::rec::Vector3D ComputeInPixelPos(const dd4hep::rec::Vector3D& pos_local, const std::array<float, 2> pixelPitch, const std::array<float, 2>& sensorLength) {
+  if (pos_local.x() < -0.5 * sensorLength[0] || pos_local.x() > 0.5 * sensorLength[0])
     throw std::runtime_error("ComputeInPixelPos: pos_local.x() out of sensor bounds");
-  if (pos_local.y() < -0.5 * sensorLength.second || pos_local.y() > 0.5 * sensorLength.second)
+  if (pos_local.y() < -0.5 * sensorLength[1] || pos_local.y() > 0.5 * sensorLength[1])
     throw std::runtime_error("ComputeInPixelPos: pos_local.y() out of sensor bounds");
 
-  float posShifted_u = pos_local.x() + 0.5 * sensorLength.first; // shift to [0, length_u] to account for both even and odd number of pixels
-  float posInPixel_u = std::fmod(posShifted_u,  pixelPitch.first);
-  posInPixel_u -= 0.5 * pixelPitch.first; // centre coordinate system at pixel centre
+  float posShifted_u = pos_local.x() + 0.5 * sensorLength[0]; // shift to [0, length_u] to account for both even and odd number of pixels
+  float posInPixel_u = std::fmod(posShifted_u,  pixelPitch[0]);
+  posInPixel_u -= 0.5 * pixelPitch[0]; // centre coordinate system at pixel centre
 
-  float posShifted_v = pos_local.y() + 0.5 * sensorLength.second;
-  float posInPixel_v = std::fmod(posShifted_v, pixelPitch.second);
-  posInPixel_v -= 0.5 * pixelPitch.second;
+  float posShifted_v = pos_local.y() + 0.5 * sensorLength[1];
+  float posInPixel_v = std::fmod(posShifted_v, pixelPitch[1]);
+  posInPixel_v -= 0.5 * pixelPitch[1];
 
   return dd4hep::rec::Vector3D(posInPixel_u, posInPixel_v, pos_local.z());
 }
 
 /* -- HitMap -- */
 
-HitMap::HitMap(std::pair<size_t, size_t> pixelCount) : m_pixCount(pixelCount) {
+HitMap::HitMap(std::array<size_t, 2> pixelCount) : m_pixCount(pixelCount) {
   const int inverseOccupancy = 2000; // assume occupancy, 5e-4 is quite conservative for Z-run
-  m_pixels.reserve(pixelCount.first * pixelCount.second / inverseOccupancy); // avoid too many reallocations
+  m_pixels.reserve(pixelCount[0] * pixelCount[1] / inverseOccupancy); // avoid too many reallocations
 }
 
-void HitMap::FillCharge(std::pair<int, int> i_uv, float charge, const SimHitWrapper& simHitWrapper) {
+void HitMap::FillCharge(std::array<int, 2> i_uv, float charge, const SimHitWrapper& simHitWrapper) {
   if (charge < 1.e-6f)
     return; // skip very small charge additions for performance (this is NECESSARY to skip in-pix bins with weight ~0)
   if (_OutOfBounds(i_uv)) [[unlikely]]
-    throw std::runtime_error("HitMap::FillCharge: pixel i_u or i_v ( " + std::to_string(i_uv.first) + ", " + std::to_string(i_uv.second) + ") out of range");
+    throw std::runtime_error("HitMap::FillCharge: pixel i_u or i_v ( " + std::to_string(i_uv[0]) + ", " + std::to_string(i_uv[1]) + ") out of range");
 
   auto [iter, inserted] = m_pixels.try_emplace(i_uv, Pixel(i_uv));
   iter->second.charge += charge;
@@ -297,9 +297,9 @@ void HitMap::ApplyThreshold(const float threshold, const Rndm::Numbers* rndm_thr
   }
 }
 
-float HitMap::GetCharge(std::pair<int, int> i_uv) const {
+float HitMap::GetCharge(std::array<int, 2> i_uv) const {
   if (_OutOfBounds(i_uv)) [[unlikely]] {
-    throw std::runtime_error("HitMap::GetCharge: pixel i_u or i_v ( " + std::to_string(i_uv.first) + ", " + std::to_string(i_uv.second) + ") out of range");
+    throw std::runtime_error("HitMap::GetCharge: pixel i_u or i_v ( " + std::to_string(i_uv[0]) + ", " + std::to_string(i_uv[1]) + ") out of range");
   }
   auto it = m_pixels.find(i_uv);
   if (it == m_pixels.end())
@@ -315,18 +315,18 @@ float HitMap::GetTotalCharge() const {
   return totalCharge;
 }
 
-inline bool HitMap::_OutOfBounds(std::pair<int, int> i_uv) const {
+inline bool HitMap::_OutOfBounds(std::array<int, 2> i_uv) const {
   return (
-    i_uv.first < 0
-    || i_uv.first >= static_cast<int>(m_pixCount.first)
-    || i_uv.second < 0
-    || i_uv.second >= static_cast<int>(m_pixCount.second)
+    i_uv[0] < 0
+    || i_uv[0] >= static_cast<int>(m_pixCount[0])
+    || i_uv[1] < 0
+    || i_uv[1] >= static_cast<int>(m_pixCount[1])
   );
 }
 
 /* -- Eta function -- */
 
-EtaFunction::EtaFunction(std::array< std::vector<std::pair<float, float>>,2> functions) : m_functions(std::move(functions)), m_binCounts({m_functions[0].size(), static_cast<uint>(m_functions[1].size())}) {
+EtaFunction::EtaFunction(std::array<EtaFuncHist, 2> functions) : m_functions(std::move(functions)), m_binCounts({m_functions[0].size(), static_cast<uint>(m_functions[1].size())}) {
 
   if (m_functions[0].empty() || m_functions[1].empty())
     throw std::runtime_error("EtaFunction: functions cannot be empty");
@@ -367,14 +367,14 @@ std::array<float, 2> EtaFunction::GetEtas(std::array<float, 2> ts) const{
 
 /* -- Clusterization -- */
 
-std::pair<float, float> Cluster::ComputePos() const {
-  std::pair<float, float> pos{0.f, 0.f};
+std::array<float, 2> Cluster::ComputePos() const {
+  std::array<float, 2> pos{0.f, 0.f};
   for (const Pixel* pix : pixels) {
-    pos.first += pix->index.first * pix->charge;
-    pos.second += pix->index.second * pix->charge;
+    pos[0] += pix->index[0] * pix->charge;
+    pos[1] += pix->index[1] * pix->charge;
   }
-  pos.first /= charge;
-  pos.second /= charge;
+  pos[0] /= charge;
+  pos[1] /= charge;
   return pos;
 }
 
@@ -384,14 +384,14 @@ int Cluster::GetSize(const int axis) const {
 
   if (axis == 0) { // u
     for (const Pixel* pix : pixels) {
-      min = std::min(min, pix->index.first);
-      max = std::max(max, pix->index.first);
+      min = std::min(min, pix->index[0]);
+      max = std::max(max, pix->index[0]);
     }
   }
   else if (axis == 1) { // v
     for (const Pixel* pix : pixels) {
-      min = std::min(min, pix->index.second);
-      max = std::max(max, pix->index.second);
+      min = std::min(min, pix->index[1]);
+      max = std::max(max, pix->index[1]);
     }
   }
   else {
@@ -401,11 +401,11 @@ int Cluster::GetSize(const int axis) const {
   return max - min + 1; // +1 because of counting: if min=max, cluster size is 1, not 0
 }
 
-std::pair<float, float> Cluster::ComputePosUncertainty_ChargeWeighted(const std::pair<float, float>& clusterPos) const {
+std::array<float, 2> Cluster::ComputePosUncertainty_ChargeWeighted(const std::array<float, 2>& clusterPos) const {
   float sig2_u=0.f, sig2_v=0.f;
   for (const Pixel* pix : pixels) {
-    float du = (pix->index.first - clusterPos.first);
-    float dv = (pix->index.second - clusterPos.second);
+    float du = (pix->index[0] - clusterPos[0]);
+    float dv = (pix->index[1] - clusterPos[1]);
     sig2_u += pix->charge * du * du;
     sig2_v += pix->charge * dv * dv;
   }
@@ -414,7 +414,7 @@ std::pair<float, float> Cluster::ComputePosUncertainty_ChargeWeighted(const std:
   return {std::sqrt(sig2_u), std::sqrt(sig2_v)};
 }
 
-std::pair<float, float> Cluster::ComputePosUncertainty_ChargeWeighted() const {
+std::array<float, 2> Cluster::ComputePosUncertainty_ChargeWeighted() const {
   return ComputePosUncertainty_ChargeWeighted(ComputePos());
 }
 
@@ -429,24 +429,24 @@ float Cluster::GetSeedPixelCharge() const {
 }
 
 
-std::array<std::pair<int, int>, 4> GetDirectNeighbors(const std::pair<int, int>& i_uv) {
+std::array<std::array<int, 2>, 4> GetDirectNeighbors(const std::array<int, 2>& i_uv) {
   return {{
-    {i_uv.first - 1, i_uv.second}, // left
-    {i_uv.first + 1, i_uv.second}, // right
-    {i_uv.first, i_uv.second - 1}, // down
-    {i_uv.first, i_uv.second + 1}  // up
+    {i_uv[0] - 1, i_uv[1]}, // left
+    {i_uv[0] + 1, i_uv[1]}, // right
+    {i_uv[0], i_uv[1] - 1}, // down
+    {i_uv[0], i_uv[1] + 1}  // up
   }};
 }
-std::array<std::pair<int, int>, 8> GetNeighbors(const std::pair<int, int>& i_uv) {
+std::array<std::array<int, 2>, 8> GetNeighbors(const std::array<int, 2>& i_uv) {
   return {{
-    {i_uv.first - 1, i_uv.second}, // left
-    {i_uv.first - 1, i_uv.second + 1}, // upper left
-    {i_uv.first, i_uv.second + 1}, // up
-    {i_uv.first + 1, i_uv.second + 1}, // upper right
-    {i_uv.first + 1, i_uv.second}, // right
-    {i_uv.first + 1, i_uv.second - 1}, // lower right
-    {i_uv.first, i_uv.second - 1}, // lower
-    {i_uv.first - 1, i_uv.second - 1}, // lower left
+    {i_uv[0] - 1, i_uv[1]}, // left
+    {i_uv[0] - 1, i_uv[1] + 1}, // upper left
+    {i_uv[0], i_uv[1] + 1}, // up
+    {i_uv[0] + 1, i_uv[1] + 1}, // upper right
+    {i_uv[0] + 1, i_uv[1]}, // right
+    {i_uv[0] + 1, i_uv[1] - 1}, // lower right
+    {i_uv[0], i_uv[1] - 1}, // lower
+    {i_uv[0] - 1, i_uv[1] - 1}, // lower left
   }};
 }
 
@@ -472,22 +472,22 @@ std::vector<Cluster> HitMap::ComputeClusters() const {
   /* Breadth First Search (BFS) implementation for clustering */
 
   std::vector<Cluster> clusters;
-  std::unordered_set<std::pair<int,int>, Hash_PairInt> visited;
+  std::unordered_set<std::array<int, 2>, Hash_PixIndex> visited;
 
   for (const auto& p : m_pixels) {
-    const std::pair<int,int> seed_uv = p.first;
+    const std::array<int, 2> seed_uv = p.first;
     if (visited.contains(seed_uv))
       continue;
 
     clusters.emplace_back(); // create new cluster
     clusters.back().pixels.reserve(10); // 10 should include >90% of clusters. i guess.
 
-    std::queue<std::pair<int,int>> queue;
+    std::queue<std::array<int, 2>> queue;
     queue.push(seed_uv);
     visited.insert(seed_uv);
 
     while (!queue.empty()) {
-      const std::pair<int,int> current_uv = queue.front();
+      const std::array<int, 2> current_uv = queue.front();
       queue.pop();
 
       /* Add pixl to cluster */

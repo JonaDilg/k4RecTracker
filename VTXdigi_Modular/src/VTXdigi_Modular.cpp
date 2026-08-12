@@ -129,6 +129,7 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
   return std::make_tuple(std::move(digiHits), std::move(digiHitLinks));
 } // operator()
 
+
 /* ---- Initialization & finalization functions ---- */
 
 void VTXdigi_Modular::InitServicesAndGeometry() {
@@ -340,8 +341,8 @@ void VTXdigi_Modular::InitLayersAndSensors() {
       if (!segmentation.isValid())
         throw GaudiException("Segmentation for readout " + readoutKey + " is not valid while checking geometry consistency.", "VTXdigi_Modular::InitLayersAndSensors()", StatusCode::FAILURE);
       const auto cellDimensions = segmentation.cellDimensions(0); // this assumes all cells have the same dimensions (ie. only one sensor type in this readout)
-      m_pixelPitch.first = cellDimensions.at(0) * 10; // convert cm to mm
-      m_pixelPitch.second = cellDimensions.at(1) * 10;
+      m_pixelPitch[0] = cellDimensions.at(0) * 10; // convert cm to mm
+      m_pixelPitch[1] = cellDimensions.at(1) * 10;
       /* TODO: get pixel count from segmentation*/
     }
     else {
@@ -449,15 +450,15 @@ void VTXdigi_Modular::InitLayersAndSensors() {
           m_sensorActiveThickness = solidThickness;
           m_inactiveMaterialAbove = surfaceThickness_above - solidThickness/2.f;
           m_inactiveMaterialBelow = surfaceThickness_below - solidThickness/2.f;
-          m_sensorLength.first = surfaceLength_u;
-          m_sensorLength.second = surfaceLength_v;
+          m_sensorLength[0] = surfaceLength_u;
+          m_sensorLength[1] = surfaceLength_v;
 
-          float pixelCountU = m_sensorLength.first / m_pixelPitch.first;
-          float pixelCountV = m_sensorLength.second / m_pixelPitch.second;
+          float pixelCountU = m_sensorLength[0] / m_pixelPitch[0];
+          float pixelCountV = m_sensorLength[1] / m_pixelPitch[1];
           if (abs(pixelCountU - std::round(pixelCountU)) > 0.0001 || abs(pixelCountV - std::round(pixelCountV)) > 0.0001)
-            throw GaudiException("Sensor side length (" + std::to_string(m_sensorLength.first) + " x " + std::to_string(m_sensorLength.second) + ") mm and pixel pitch (" + std::to_string(m_pixelPitch.first) + " x " + std::to_string(m_pixelPitch.second) + ") mm result in a non-integer pixel count (" + std::to_string(pixelCountU) + " x " + std::to_string(pixelCountV) + ") in subDetector " + m_subDetName.value() + ".", "VTXdigi_Modular::InitLayersAndSensors()", StatusCode::FAILURE);
-          m_pixelCount.first = std::round(pixelCountU);
-          m_pixelCount.second = std::round(pixelCountV);
+            throw GaudiException("Sensor side length (" + std::to_string(m_sensorLength[0]) + " x " + std::to_string(m_sensorLength[1]) + ") mm and pixel pitch (" + std::to_string(m_pixelPitch[0]) + " x " + std::to_string(m_pixelPitch[1]) + ") mm result in a non-integer pixel count (" + std::to_string(pixelCountU) + " x " + std::to_string(pixelCountV) + ") in subDetector " + m_subDetName.value() + ".", "VTXdigi_Modular::InitLayersAndSensors()", StatusCode::FAILURE);
+          m_pixelCount[0] = std::round(pixelCountU);
+          m_pixelCount[1] = std::round(pixelCountV);
           membersDefined = true;
           debug() << "     - Setting expected dimensions according to first found sensor. Key: " << sensorKey << ", volumeID: " << sensorVolumeID << " (sensor " << sensorNumber << " in layer " << layer << ")" << endmsg;
           debug() << "       - Solid:  thickness " << solidThickness << "mm,  lengths " << solidLength_0 << " / " << solidLength_1 << "mm (arbitray ordering)" << endmsg;
@@ -465,14 +466,14 @@ void VTXdigi_Modular::InitLayersAndSensors() {
         }
         else {
           // For all other sensors: check for consistency with first sensor
-          if (std::abs(surfaceLength_u - m_sensorLength.first) > 0.001 || std::abs(surfaceLength_v - m_sensorLength.second) > 0.001 || std::abs(solidThickness - m_sensorActiveThickness) > 0.001)
-            throw GaudiException("Sensor dimension mismatch found in sensor " + sensorKey + " (volumeID " + std::to_string(sensorVolumeID) + ") in layer " + std::to_string(layer) + " of subDetector " + m_subDetName.value() + ": expected dimensions of (" + std::to_string(m_sensorLength.first) + " x " + std::to_string(m_sensorLength.second) + " x " + std::to_string(m_sensorActiveThickness) + ") mm3, but found (" + std::to_string(surfaceLength_u) + " x " + std::to_string(surfaceLength_v) + " x " + std::to_string(solidThickness) + ") mm3. This algorithm expects exactly one type of sensor per subDetector. Use different instances of the algorithm if different layers consist of different sensors.", "VTXdigi_Modular::InitLayersAndSensors()", StatusCode::FAILURE);
+          if (std::abs(surfaceLength_u - m_sensorLength[0]) > 0.001 || std::abs(surfaceLength_v - m_sensorLength[1]) > 0.001 || std::abs(solidThickness - m_sensorActiveThickness) > 0.001)
+            throw GaudiException("Sensor dimension mismatch found in sensor " + sensorKey + " (volumeID " + std::to_string(sensorVolumeID) + ") in layer " + std::to_string(layer) + " of subDetector " + m_subDetName.value() + ": expected dimensions of (" + std::to_string(m_sensorLength[0]) + " x " + std::to_string(m_sensorLength[1]) + " x " + std::to_string(m_sensorActiveThickness) + ") mm3, but found (" + std::to_string(surfaceLength_u) + " x " + std::to_string(surfaceLength_v) + " x " + std::to_string(solidThickness) + ") mm3. This algorithm expects exactly one type of sensor per subDetector. Use different instances of the algorithm if different layers consist of different sensors.", "VTXdigi_Modular::InitLayersAndSensors()", StatusCode::FAILURE);
         }
       } // loop over sensors
     } // loop over modules
   } // loop over layers
 
-  info() << " - Retrieved sensor parameters: area (" << m_sensorLength.first << " x " << m_sensorLength.second << ") mm2, thickness " << m_sensorActiveThickness << " mm with (" << m_inactiveMaterialAbove << "/" << m_inactiveMaterialBelow << ") mm of inactive material above/below, pixel pitch (" << m_pixelPitch.first << " x " << m_pixelPitch.second << ") mm, pixel count (" << m_pixelCount.first << " x " << m_pixelCount.second << "). All " << sensorNumber << " sensors in the relevant layers share these parameters." << endmsg;
+  info() << " - Retrieved sensor parameters: area (" << m_sensorLength[0] << " x " << m_sensorLength[1] << ") mm2, thickness " << m_sensorActiveThickness << " mm with (" << m_inactiveMaterialAbove << "/" << m_inactiveMaterialBelow << ") mm of inactive material above/below, pixel pitch (" << m_pixelPitch[0] << " x " << m_pixelPitch[1] << ") mm, pixel count (" << m_pixelCount[0] << " x " << m_pixelCount[1] << "). All " << sensorNumber << " sensors in the relevant layers share these parameters." << endmsg;
 } // InitLayersAndSensors()
 
 void VTXdigi_Modular::InitHistograms() {
@@ -503,21 +504,21 @@ void VTXdigi_Modular::InitHistograms() {
   Gaudi::Accumulators::Axis<float> axis_mcParticleLevel{3, -0.5f, 2.5f};
 
   Gaudi::Accumulators::Axis<float> axis_pixels_u{
-    static_cast<unsigned int>(m_pixelCount.first),
+    static_cast<unsigned int>(m_pixelCount[0]),
     -0.5f,
-    static_cast<float>(m_pixelCount.first+0.5)};
+    static_cast<float>(m_pixelCount[0]+0.5)};
   Gaudi::Accumulators::Axis<float> axis_pixels_v{
-    static_cast<unsigned int>(m_pixelCount.second),
+    static_cast<unsigned int>(m_pixelCount[1]),
     -0.5f,
-    static_cast<float>(m_pixelCount.second+0.5)};
+    static_cast<float>(m_pixelCount[1]+0.5)};
   Gaudi::Accumulators::Axis<float> axis_inpix_u{
     100,
-    -1.f * m_pixelPitch.first/2.f * 1000.f,
-    m_pixelPitch.first/2.f * 1000.f};
+    -1.f * m_pixelPitch[0]/2.f * 1000.f,
+    m_pixelPitch[0]/2.f * 1000.f};
   Gaudi::Accumulators::Axis<float> axis_inpix_v{
     100,
-    -1.f * m_pixelPitch.second/2.f * 1000.f,
-    m_pixelPitch.second/2.f * 1000.f};
+    -1.f * m_pixelPitch[1]/2.f * 1000.f,
+    m_pixelPitch[1]/2.f * 1000.f};
 
   Gaudi::Accumulators::Axis<float> axis_pathLength{500, 0.f, m_sensorActiveThickness*1000.f*10.f};
   Gaudi::Accumulators::Axis<float> axis_pathTravel{1000, -m_sensorActiveThickness*1000.f*10.f, m_sensorActiveThickness*1000.f*10.f};
@@ -1270,19 +1271,19 @@ void VTXdigi_Modular::CreateDigiHits(edm4hep::TrackerHitPlaneCollection& digiHit
     digiHit.setEDep(cluster.charge / VTXdigi_tools::kChargePerkeV);
 
     // position
-    const std::pair<float, float> clusterPos_index = cluster.ComputePos();
+    const std::array<float, 2> clusterPos_index = cluster.ComputePos();
     const dd4hep::rec::Vector3D clusterPos_local = VTXdigi_tools::ComputePosFromPixIndex_local(clusterPos_index, m_sensorLength, m_pixelPitch, m_chargeCollector->GetChargeCollectionDepthCenter());
     const dd4hep::rec::Vector3D clusterPos_global = VTXdigi_tools::LocalToGlobal(clusterPos_local, trafoMatrix);
-    debug() << "     - Found cluster with " << cluster.pixels.size() << " pixels, charge " << cluster.charge << ", center at (" << clusterPos_index.first << ", " << clusterPos_index.second << "). Has " << cluster.simHits.size() << " contributing simHits." << endmsg;
+    debug() << "     - Found cluster with " << cluster.pixels.size() << " pixels, charge " << cluster.charge << ", center at (" << clusterPos_index[0] << ", " << clusterPos_index[1] << "). Has " << cluster.simHits.size() << " contributing simHits." << endmsg;
     digiHit.setPosition(VTXdigi_tools::ConvertVector(clusterPos_global));
 
     // pos uncertainty
     digiHit.setU(direction_u);
     digiHit.setV(direction_v);
     if (m_positionUncertainty.value().empty()) {
-      std::pair<float, float> clusterPos_unc = cluster.ComputePosUncertainty_ChargeWeighted(clusterPos_index);
-      digiHit.setDu(clusterPos_unc.first * m_pixelPitch.first);
-      digiHit.setDv(clusterPos_unc.second * m_pixelPitch.second);
+      std::array<float, 2> clusterPos_unc = cluster.ComputePosUncertainty_ChargeWeighted(clusterPos_index);
+      digiHit.setDu(clusterPos_unc[0] * m_pixelPitch[0]);
+      digiHit.setDv(clusterPos_unc[1] * m_pixelPitch[1]);
     }
     else if (m_positionUncertainty.value().size() == 2) {
       digiHit.setDu(m_positionUncertainty.value().at(0));
@@ -1348,7 +1349,7 @@ void VTXdigi_Modular::FillHistograms_perSimHit(const VTXdigi_tools::SimHitWrappe
   const dd4hep::rec::Vector3D simHitPos_global = VTXdigi_tools::ConvertVector(simHit.hitPtr()->getPosition());
   const dd4hep::rec::Vector3D simHitPos_local = VTXdigi_tools::GlobalToLocal(simHitPos_global, trafoMatrix);
   const dd4hep::rec::Vector3D simHitProdVertex_global = VTXdigi_tools::ConvertVector(simHit.hitPtr()->getParticle().getVertex());
-  const std::pair<int, int> i_uv = VTXdigi_tools::ComputePixelIndices(simHitPos_local, m_pixelPitch, m_pixelCount);
+  const std::array<int, 2> i_uv = VTXdigi_tools::ComputePixelIndices(simHitPos_local, m_pixelPitch, m_pixelCount);
 
   const dd4hep::rec::Vector3D simHitMomentum = VTXdigi_tools::ConvertVector(simHit.hitPtr()->getMomentum()); // in GeV
   const dd4hep::rec::Vector3D simHitMomentumInitial = VTXdigi_tools::ConvertVector(simHit.hitPtr()->getParticle().getMomentum()); // in GeV
@@ -1384,19 +1385,19 @@ void VTXdigi_Modular::FillHistograms_perSimHit(const VTXdigi_tools::SimHitWrappe
   ++(*m_hist1d.at(layer).at(hist1d_simHit_particleMomentumInitialDirection_y))[simHitMomentumInitial.y() / simHitMomentumInitial.r()];
   ++(*m_hist1d.at(layer).at(hist1d_simHit_particleMomentumInitialDirection_z))[simHitMomentumInitial.z() / simHitMomentumInitial.r()];
 
-  ++(*m_hist2d.at(layer).at(hist2d_hitMap_simHits))[{i_uv.first, i_uv.second}];
+  ++(*m_hist2d.at(layer).at(hist2d_hitMap_simHits))[{i_uv[0], i_uv[1]}];
 
   const VTXdigi_tools::MCParticleLevel mcParticleLevel = simHit.mcParticleLevel();
 
   if ( mcParticleLevel == VTXdigi_tools::MCParticleLevel::Primary ) {
     ++(*m_hist1d.at(layer).at(hist1d_simHit_z_causedByPrimary))[simHitPos_global.z()];
 
-    ++(*m_hist2d.at(layer).at(hist2d_hitMap_simHits_causedByPrimary))[{i_uv.first, i_uv.second}];
+    ++(*m_hist2d.at(layer).at(hist2d_hitMap_simHits_causedByPrimary))[{i_uv[0], i_uv[1]}];
   }
   else if ( mcParticleLevel == VTXdigi_tools::MCParticleLevel::Secondary ) {
     ++(*m_hist1d.at(layer).at(hist1d_simHit_z_causedBySecondary))[simHitPos_global.z()];
 
-    ++(*m_hist2d.at(layer).at(hist2d_hitMap_simHits_causedBySecondary))[{i_uv.first, i_uv.second}];
+    ++(*m_hist2d.at(layer).at(hist2d_hitMap_simHits_causedBySecondary))[{i_uv[0], i_uv[1]}];
   }
 }
 
@@ -1404,12 +1405,11 @@ void VTXdigi_Modular::FillHistograms_perPixel(const dd4hep::DDSegmentation::Volu
   /* executed once for each pixel */
 
   const int layer = VTXdigi_tools::GetLayer(volumeID, m_cellIdDecoder);
-  const std::pair<int, int> i_uv = pix.index;
+  const std::array<int, 2> i_uv = pix.index;
 
-  ++(*m_hist2d.at(layer).at(hist2d_hitMap_pixelHits))[{i_uv.first, i_uv.second}];
+  ++(*m_hist2d.at(layer).at(hist2d_hitMap_pixelHits))[{i_uv[0], i_uv[1]}];
 }
 
-// void VTXdigi_Modular::FillHistograms_perDigiHit(const std::unordered_set<const VTXdigi_tools::SimHitWrapper*>& simHits, const edm4hep::TrackerHitPlane& digiHit, const TGeoHMatrix& trafoMatrix, const int clusterSize, const int clusterSize_u, const int clusterSize_v) const {
 void VTXdigi_Modular::FillHistograms_perDigiHit(const VTXdigi_tools::Cluster& cluster, const edm4hep::TrackerHitPlane& digiHit, const TGeoHMatrix& trafoMatrix) const {
   /* executed once for each digiHit */
   const int layer = VTXdigi_tools::GetLayer(digiHit.getCellID(), m_cellIdDecoder);

@@ -79,20 +79,20 @@ bool ConstructPath(Path& path, const SimHitWrapper& simHit, const TGeoHMatrix& t
   path.entry = path.simPos - scaleFactor_entry * path.travel;
 
   /* Step 3 - clip path to sensor edges (in u/v) */
-  std::pair<float, float> t = std::make_pair(0.f, 1.f); // parametrize path as entry + t*travel; t in [0,1]
+  std::array<float, 2> t = {0.f, 1.f}; // parametrize path as entry + t*travel; t in [0,1]
   t = ComputePathClippingFactors(t, path.entry.x(), path.travel.x(), digitizer.ActiveVolumeDimensions().at(0));
   t = ComputePathClippingFactors(t, path.entry.y(), path.travel.y(), digitizer.ActiveVolumeDimensions().at(1));
-  if (t.first != 0.f || t.second != 1.f) {
-    if (0.f <= t.first && t.first < t.second && t.second <= 1.f) {
+  if (t[0] != 0.f || t[1] != 1.f) {
+    if (0.f <= t[0] && t[0] < t[1] && t[1] <= 1.f) {
       /* valid clipping */
-      digitizer.debug() << "       - Clipping SimHitPath with t [" << t.first << ", " << t.second << "]. PathLength changed to " << static_cast<int>((t.second - t.first) * path.travel.r()*1000) << " um from " << static_cast<int>(path.travel.r()*1000) << " um" << endmsg;
+      digitizer.debug() << "       - Clipping SimHitPath with t [" << t[0] << ", " << t[1] << "]. PathLength changed to " << static_cast<int>((t[1] - t[0]) * path.travel.r()*1000) << " um from " << static_cast<int>(path.travel.r()*1000) << " um" << endmsg;
 
-      path.entry = path.entry + t.first * path.travel;
-      path.travel = (t.second - t.first) * path.travel;
+      path.entry = path.entry + t[0] * path.travel;
+      path.travel = (t[1] - t[0]) * path.travel;
     }
     else [[unlikely]] {
       /* invalid clipping, shouldn't happen */
-      digitizer.warning() << "VTXdigi_tools::Path::Path() - invalid clipping factors t = [" << t.first << ", " << t.second << "]. Path might lie completely outside the sensor." << endmsg;
+      digitizer.warning() << "VTXdigi_tools::Path::Path() - invalid clipping factors t = [" << t[0] << ", " << t[1] << "]. Path might lie completely outside the sensor." << endmsg;
       digitizer.debug() << " -> entry (" << path.entry.x() << ", " << path.entry.y() << ", " << path.entry.z() << ") mm, exit (" << path.entry.x() + path.travel.x() << ", " << path.entry.y() + path.travel.y() << ", " << path.entry.z() + path.travel.z() << ") mm, sensor dim. (+-" << digitizer.ActiveVolumeDimensions().at(0)/2 << ", +-" << digitizer.ActiveVolumeDimensions().at(1)/2 << ") mm" << endmsg;
       digitizer.debug() << " -> Path length " << static_cast<int>(path.travel.r()*1000) << " um, in G4 " << static_cast<int>(simHit.hitPtr()->getPathLength()*1000) << " um" << endmsg;
       return false;
@@ -122,7 +122,7 @@ bool ConstructPath(Path& path, const SimHitWrapper& simHit, const TGeoHMatrix& t
   return true; // indicate valid path constructed
 }
 
-std::pair<float, float> ComputePathClippingFactors(std::pair<float,float> t, const float entry_ax, const float travel_ax, const float sensorLength_ax) {
+std::array<float, 2> ComputePathClippingFactors(std::array<float, 2> t, const float entry_ax, const float travel_ax, const float sensorLength_ax) {
   /* only need the components that are parallel to the axis (u/v) that we are clipping */
   const bool positiveDir = travel_ax >= 0.f; // false -> path points in negative direction along this axis
 
@@ -132,9 +132,9 @@ std::pair<float, float> ComputePathClippingFactors(std::pair<float,float> t, con
 
     const float t_clip = (-minPos - 0.5f * sensorLength_ax) / std::abs(travel_ax);
     if (positiveDir){
-      t.first = std::max(t.first, t_clip);
+      t[0] = std::max(t[0], t_clip);
     } else {
-      t.second = std::min(t.second, 1-t_clip);
+      t[1] = std::min(t[1], 1-t_clip);
     }
   }
 
@@ -143,9 +143,9 @@ std::pair<float, float> ComputePathClippingFactors(std::pair<float,float> t, con
     const float t_clip = (maxPos - 0.5f * sensorLength_ax) / std::abs(travel_ax);
 
     if (positiveDir) {
-      t.second = std::min(t.second, 1-t_clip);
+      t[1] = std::min(t[1], 1-t_clip);
     } else {
-      t.first = std::max(t.first, t_clip);
+      t[0] = std::max(t[0], t_clip);
     }
   }
 
@@ -208,12 +208,12 @@ LookupTable::LookupTable(const std::string& lutFileName, const VTXdigi_Modular& 
     }
   }
 
-  const std::pair<float, float> pitch = {std::stof(headerLineEntries.at(1)) / 1000.f, std::stof(headerLineEntries.at(2)) / 1000.f};
-  if (std::abs(pitch.first - digitizer.PixelPitch().first) > eps || std::abs(pitch.second - digitizer.PixelPitch().second) > eps) {
+  const std::array<float, 2> pitch = {std::stof(headerLineEntries.at(1)) / 1000.f, std::stof(headerLineEntries.at(2)) / 1000.f};
+  if (std::abs(pitch[0] - digitizer.PixelPitch().at(0)) > eps || std::abs(pitch[1] - digitizer.PixelPitch().at(1)) > eps) {
     if (!digitizer.LUT_ignorePitch())
-      throw std::runtime_error("VTXdigi_tools::LookupTable::LookupTable(): Pixel pitch mismatch between LUT file and detector geometry: LUT file specifies (" + std::to_string(pitch.first) + ", " + std::to_string(pitch.second) + ") mm, but geometry has (" + std::to_string(digitizer.PixelPitch().first) + ", " + std::to_string(digitizer.PixelPitch().second) + ") mm.");
+      throw std::runtime_error("VTXdigi_tools::LookupTable::LookupTable(): Pixel pitch mismatch between LUT file and detector geometry: LUT file specifies (" + std::to_string(pitch[0]) + ", " + std::to_string(pitch[1]) + ") mm, but geometry has (" + std::to_string(digitizer.PixelPitch().at(0)) + ", " + std::to_string(digitizer.PixelPitch().at(1)) + ") mm.");
     else
-      digitizer.warning() << "Pixel pitch mismatch between LUT file and detector geometry. LUT file: " << pitch.first << "mm, geometry: " << digitizer.PixelPitch().first << "mm. Ignored because LookupTableIgnorePitch is set to true." << endmsg;
+      digitizer.warning() << "Pixel pitch mismatch between LUT file and detector geometry. LUT file: " << pitch[0] << "mm, geometry: " << digitizer.PixelPitch().at(0) << "mm. Ignored because LookupTableIgnorePitch is set to true." << endmsg;
   }
 
   digitizer.debug() << "   - Found matching pixel pitch and sensor thickness in LUT file." << endmsg;
@@ -378,7 +378,7 @@ int LookupTable::FindIndex (const Index_inPix& j, const int col, const int row) 
   return index_matrix * m_matrixSize * m_matrixSize + index_element;
 }
 
-std::array<std::vector<std::pair<float, float>>,2> LookupTable::ComputeEtaFunction() const {
+std::array<EtaFuncHist, 2> LookupTable::ComputeEtaFunction() const {
   /* compute the eta function by projecting the LUT (binning in u,v,w) onto the u- and v-axes
     eta(t) : [0,1) -> [0,1]
 
@@ -389,7 +389,7 @@ std::array<std::vector<std::pair<float, float>>,2> LookupTable::ComputeEtaFuncti
       the first and last bin of the eta function are only half as wide for odd bin counts. */
 
   const unsigned int n_bins_u = (m_binCount.at(0) % 2 == 0) ? m_binCount.at(0) : m_binCount.at(0) + 1; // if odd number of bins, add one
-  std::vector<std::pair<float, float>> function_u(n_bins_u); // binned eta function: pair<bin lower edge, bin eta value>
+  EtaFuncHist function_u(n_bins_u); // binned eta function: pair<bin lower edge, bin eta value>
 
   // loop along u axis (in terms of eta binning)
   for (int i_t=0; i_t < m_binCount.at(0); ++i_t) {
@@ -458,9 +458,9 @@ std::array<std::vector<std::pair<float, float>>,2> LookupTable::ComputeEtaFuncti
   // TODO: do this for v as well.
 
   const unsigned int n_bins_v = (m_binCount.at(1) % 2 == 0) ? m_binCount.at(1) : m_binCount.at(1) + 1;
-  std::vector<std::pair<float, float>> function_v(n_bins_v);
+  EtaFuncHist function_v(n_bins_v);
 
-  return std::array<std::vector<std::pair<float, float>>,2>({function_u, function_v});
+  return std::array<EtaFuncHist, 2>({function_u, function_v});
 }
 
 ChargeCollector_LUT::ChargeCollector_LUT(const VTXdigi_Modular& digitizer) : IChargeCollector(digitizer),
@@ -472,21 +472,21 @@ ChargeCollector_LUT::ChargeCollector_LUT(const VTXdigi_Modular& digitizer) : ICh
 
   /* fine grid for the voxel traversal, fixed per job (all sensors share pitch & dimensions, checked at init) */
   const Index_inPix binCount = m_LUT.GetBinCount();
-  const std::pair<float, float> pitch = digitizer.PixelPitch();
-  const std::pair<size_t, size_t> pixelCount = digitizer.PixelCount();
+  const std::array<float, 2> pitch = digitizer.PixelPitch();
+  const std::array<size_t, 2> pixelCount = digitizer.PixelCount();
   const float activeThickness = digitizer.ActiveVolumeDimensions().at(2);
 
   m_cellSize = {
-    pitch.first / binCount[0],
-    pitch.second / binCount[1],
+    pitch[0] / binCount[0],
+    pitch[1] / binCount[1],
     activeThickness / binCount[2]};
   m_gridOrigin = {
-    -0.5f * pitch.first * static_cast<float>(pixelCount.first),
-    -0.5f * pitch.second * static_cast<float>(pixelCount.second),
+    -0.5f * pitch[0] * static_cast<float>(pixelCount[0]),
+    -0.5f * pitch[1] * static_cast<float>(pixelCount[1]),
     -0.5f * activeThickness};
   m_gridBinCount = {
-    static_cast<int>(pixelCount.first) * binCount[0],
-    static_cast<int>(pixelCount.second) * binCount[1],
+    static_cast<int>(pixelCount[0]) * binCount[0],
+    static_cast<int>(pixelCount[1]) * binCount[1],
     binCount[2]};
 
   m_digitizer.info() << " - ChargeCollector_LUT constructed successfully." << endmsg;
@@ -573,7 +573,7 @@ void ChargeCollector_LUT::FillHit(const SimHitWrapper& simHit, HitMap& hitMap, c
     }
     else {
       vox.j[ax] += step[ax];
-      int& pixelIndex = (ax == 0) ? vox.i.first : vox.i.second;
+      int& pixelIndex = (ax == 0) ? vox.i[0] : vox.i[1];
       if (vox.j[ax] == binCount[ax]) {
         vox.j[ax] = 0;
         ++pixelIndex;
@@ -595,10 +595,10 @@ void ChargeCollector_LUT::DistributeVoxelCharge(HitMap& hitMap, const Index_voxe
 
   /* cache things, this is the hottest loop */
   const int lutSize = m_LUT.GetSize();
-  const int i_u_origin = i_vox.i.first - m_LUT.GetSizeHalf(); // pix index of leftmost pixel in LUT matrix
-  const int i_v_origin = i_vox.i.second - m_LUT.GetSizeHalf();
-  const int pixelCount_u = static_cast<int>(m_digitizer.PixelCount().first);
-  const int pixelCount_v = static_cast<int>(m_digitizer.PixelCount().second);
+  const int i_u_origin = i_vox.i[0] - m_LUT.GetSizeHalf(); // pix index of leftmost pixel in LUT matrix
+  const int i_v_origin = i_vox.i[1] - m_LUT.GetSizeHalf();
+  const int pixelCount_u = static_cast<int>(m_digitizer.PixelCount().at(0));
+  const int pixelCount_v = static_cast<int>(m_digitizer.PixelCount().at(1));
 
   const int col_min = std::max(0, -i_u_origin);
   const int col_max = std::min(lutSize, pixelCount_u - i_u_origin);
@@ -644,9 +644,9 @@ ChargeCollector_SinglePixel::ChargeCollector_SinglePixel(const VTXdigi_Modular& 
 void ChargeCollector_SinglePixel::FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix) const {
   (void) trafoMatrix; // Not used in this implementation of ChargeCollector, but we need to keep it as argument to conform to the interface. Silences the unused parameter warning.
 
-  const std::pair<int, int> i_uv = ComputePixelIndices(simHit.truthPos(), m_digitizer.PixelPitch(), m_digitizer.PixelCount());
+  const std::array<int, 2> i_uv = ComputePixelIndices(simHit.truthPos(), m_digitizer.PixelPitch(), m_digitizer.PixelCount());
 
-  if (!(i_uv.first == -1 || i_uv.second == -1 || i_uv.first >= static_cast<int>(m_digitizer.PixelCount().first) || i_uv.second >= static_cast<int>(m_digitizer.PixelCount().second)))
+  if (!(i_uv[0] == -1 || i_uv[1] == -1 || i_uv[0] >= static_cast<int>(m_digitizer.PixelCount()[0]) || i_uv[1] >= static_cast<int>(m_digitizer.PixelCount()[1])))
     hitMap.FillCharge(i_uv, simHit.charge(), simHit);
 }
 
@@ -661,23 +661,23 @@ void ChargeCollector_Debug::FillHit(const SimHitWrapper& simHit, HitMap& hitMap,
 
   const dd4hep::rec::Vector3D pos_local = simHit.truthPos();
   const float charge = simHit.charge();
-  const std::pair<int, int> i_uv = ComputePixelIndices(pos_local, m_digitizer.PixelPitch(), m_digitizer.PixelCount());
+  const std::array<int, 2> i_uv = ComputePixelIndices(pos_local, m_digitizer.PixelPitch(), m_digitizer.PixelCount());
 
   m_digitizer.verbose() << "     - SimHit at local position (" << pos_local.x() << ", " << pos_local.y() << ", " << pos_local.z() << ")" << endmsg;
-  m_digitizer.verbose() << "       - and pixel indices      (" << i_uv.first << ", " << i_uv.second << ")" << endmsg;
-  if (i_uv.first == -1 || i_uv.second == -1 || i_uv.first >= static_cast<int>(m_digitizer.PixelCount().first) || i_uv.second >= static_cast<int>(m_digitizer.PixelCount().second)) {
+  m_digitizer.verbose() << "       - and pixel indices      (" << i_uv[0] << ", " << i_uv[1] << ")" << endmsg;
+  if (i_uv[0] == -1 || i_uv[1] == -1 || i_uv[0] >= static_cast<int>(m_digitizer.PixelCount()[0]) || i_uv[1] >= static_cast<int>(m_digitizer.PixelCount()[1])) {
     m_digitizer.warning() << "simHit local position (" << pos_local.x() << ", " << pos_local.y() << ", " << pos_local.z() << ") is out of sensor bounds U: [" << -m_digitizer.ActiveVolumeDimensions().at(0)/2 << ", " << m_digitizer.ActiveVolumeDimensions().at(0)/2 << "], V: [" << -m_digitizer.ActiveVolumeDimensions().at(1)/2 << ", " << m_digitizer.ActiveVolumeDimensions().at(1)/2 << "]. This simHit will be skipped." << endmsg;
   }
   else {
     m_digitizer.verbose() << "       - Filling charge " << simHit.charge() << " e." << endmsg;
 
     hitMap.FillCharge(i_uv, 0.5*charge, simHit);
-    if (i_uv.first + 1 < static_cast<int>(m_digitizer.PixelCount().first))
-      hitMap.FillCharge({i_uv.first + 1, i_uv.second}, 0.3*charge, simHit);
-    if (i_uv.second + 1 < static_cast<int>(m_digitizer.PixelCount().second))
-      hitMap.FillCharge({i_uv.first, i_uv.second + 1}, 0.1*charge, simHit);
-    if (i_uv.second + 2 < static_cast<int>(m_digitizer.PixelCount().second))
-      hitMap.FillCharge({i_uv.first, i_uv.second + 2}, 0.1*charge, simHit);
+    if (i_uv[0] + 1 < static_cast<int>(m_digitizer.PixelCount()[0]))
+      hitMap.FillCharge({i_uv[0] + 1, i_uv[1]}, 0.3*charge, simHit);
+    if (i_uv[1] + 1 < static_cast<int>(m_digitizer.PixelCount()[1]))
+      hitMap.FillCharge({i_uv[0], i_uv[1] + 1}, 0.1*charge, simHit);
+    if (i_uv[1] + 2 < static_cast<int>(m_digitizer.PixelCount()[1]))
+      hitMap.FillCharge({i_uv[0], i_uv[1] + 2}, 0.1*charge, simHit);
 
     m_digitizer.verbose() << "       - Total charge collected in hitMap: " << hitMap.GetTotalCharge() << " e." << endmsg;
   }

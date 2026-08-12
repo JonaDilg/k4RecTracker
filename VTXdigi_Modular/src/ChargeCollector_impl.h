@@ -9,8 +9,10 @@ class SimHitWrapper; // forward-declaration for include/VTXdigi_tools.h
 class HitMap; // forward-declaration for include/VTXdigi_tools.h
 class EtaFunction; // forward-declaration for include/VTXdigi_tools.h
 
-using Index_pix = std::pair<int, int>;
+using Index_pix = std::array<int, 2>;
 using Index_inPix = std::array<int, 3>;
+
+using EtaFuncHist = std::vector<std::pair<float, float>>;
 
 constexpr float kPathLengthTolerance = 1.05f; // tolerance factor for how much longer the computed path can be compared to the Geant4 path length. If the computed path is longer than the Geant4 path, either the linear path approximation breaks down, or the particle begins or ends inside the sensor volume
 constexpr float kLutEntryMinimum = 1.e-3f; // LUT entries below this value are set to zero, to minimise unnecessary computations in hot loop. result is quite sensitive to this, so choose carefully. 1e-5 seems to be a good compromise between accuracy and performance for the TPSCo 65nm CIS LUT
@@ -33,7 +35,7 @@ struct Path {
 };
 
 /** @brief Compute the factors by which to clip a path along a given axis (to clip it to the sensor volume) */
-std::pair<float, float> ComputePathClippingFactors(std::pair<float,float> t, const float entry_ax, const float travel_ax, const float sensorLength_ax);
+std::array<float, 2> ComputePathClippingFactors(std::array<float, 2> t, const float entry_ax, const float travel_ax, const float sensorLength_ax);
 
 /** @brief Construct path information from a simHit and the sensor's transformation matrix
  * @note returns true if path is valid, false otherwise. false means the path would not intersect the sensor volume */
@@ -81,7 +83,7 @@ public:
   inline int GetBinCount(int i) const { return m_binCount.at(i); }
   inline Index_inPix GetBinCount() const { return m_binCount; }
 
-  std::array<std::vector<std::pair<float, float>>,2> ComputeEtaFunction() const;
+  std::array<EtaFuncHist,2> ComputeEtaFunction() const;
 
 private:
 
@@ -108,7 +110,7 @@ public:
 
   void FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix) const override;
 
-  std::optional<std::array<std::vector<std::pair<float, float>>,2>> ComputeEtaFunction() const override {
+  std::optional<std::array<EtaFuncHist,2>> ComputeEtaFunction() const override {
     return std::make_optional(m_LUT.ComputeEtaFunction());
   };
 

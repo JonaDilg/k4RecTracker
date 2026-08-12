@@ -52,11 +52,11 @@ struct VTXdigi_Modular final : k4FWCore::MultiTransformer <std::tuple<edm4hep::T
 
   /* -- Accessors for charge collector -- */
 
-  inline std::array<float, 3> ActiveVolumeDimensions() const { return {m_sensorLength.first, m_sensorLength.second, m_sensorActiveThickness}; }
+  inline std::array<float, 3> ActiveVolumeDimensions() const { return {m_sensorLength[0], m_sensorLength[1], m_sensorActiveThickness}; }
 
-  inline std::pair<float, float> PixelPitch() const { return m_pixelPitch; }
+  inline std::array<float, 2> PixelPitch() const { return m_pixelPitch; }
 
-  inline std::pair<size_t, size_t> PixelCount() const { return m_pixelCount; }
+  inline std::array<size_t, 2> PixelCount() const { return m_pixelCount; }
 
   inline float Threshold() const { return m_threshold; }
 
@@ -159,13 +159,13 @@ private:
   std::unique_ptr<VTXdigi_tools::IChargeCollector> m_chargeCollector = nullptr;
   std::optional<VTXdigi_tools::EtaFunction> m_etaFunction = std::nullopt;
 
-  std::pair<size_t, size_t> m_pixelCount = {0, 0};
-  std::pair<float, float> m_pixelPitch = {0.0f, 0.0f};
+  std::array<size_t, 2> m_pixelCount = {0, 0};
+  std::array<float, 2> m_pixelPitch = {0.0f, 0.0f};
   float m_sensorActiveThickness = 0.0f; // also in mm
   float m_inactiveMaterialAbove = 0.0f; // in mm, inactive material above the active volume in sensor normal direction
   float m_inactiveMaterialBelow = 0.0f;
 
-  std::pair<float, float> m_sensorLength = {0.0f, 0.0f};
+  std::array<float, 2> m_sensorLength = {0.0f, 0.0f};
   TGeoRotation m_sensorNormalRotation = TGeoRotation("sensorNormalRotation"); // rotation to rotate the sensor local coordinate system. Initialised to unit matrix.
 
   Rndm::Numbers m_rndm_charge; // TODO: Is this multithreading safe?

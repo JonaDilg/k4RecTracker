@@ -11,6 +11,8 @@ struct VTXdigi_Modular;
 
 namespace VTXdigi_tools {
 
+  using EtaFuncHist = std::vector<std::pair<float, float>>;
+
   class SimHitWrapper; // forward-declare things in include/VTXdigi_tools.h
   class HitMap;
 
@@ -23,7 +25,7 @@ public:
    * @return An optional pair containing the eta function values in u and v, or std::nullopt if not applicable in the selected implementation
    * @note Uses a binning from pixel centre to pixel centre, same bin width in u and v as the LUT itself */
   // this is to stop leaking LUT implementation details into the digitizer
-  virtual std::optional< std::array<std::vector<std::pair<float, float>>, 2> > ComputeEtaFunction() const { return std::nullopt; }
+  virtual std::optional< std::array<EtaFuncHist, 2> > ComputeEtaFunction() const { return std::nullopt; }
 
   float GetChargeCollectionDepthCenter() const { return m_chargeCollectionDepthCenter; }
 
