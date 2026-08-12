@@ -242,6 +242,23 @@ dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::pair<float, float>
   return ComputePosFromPixIndex_local(index, sensorLength, pixelPitch, 0.f);
 }
 
+dd4hep::rec::Vector3D ComputeInPixelPos(const dd4hep::rec::Vector3D& pos_local, const std::pair<float, float> pixelPitch, const std::pair<float, float>& sensorLength) {
+  if (pos_local.x() < -0.5 * sensorLength.first || pos_local.x() > 0.5 * sensorLength.first)
+    throw std::runtime_error("ComputeInPixelPos: pos_local.x() out of sensor bounds");
+  if (pos_local.y() < -0.5 * sensorLength.second || pos_local.y() > 0.5 * sensorLength.second)
+    throw std::runtime_error("ComputeInPixelPos: pos_local.y() out of sensor bounds");
+
+  float posShifted_u = pos_local.x() + 0.5 * sensorLength.first; // shift to [0, length_u] to account for both even and odd number of pixels
+  float posInPixel_u = std::fmod(posShifted_u,  pixelPitch.first);
+  posInPixel_u -= 0.5 * pixelPitch.first; // centre coordinate system at pixel centre
+
+  float posShifted_v = pos_local.y() + 0.5 * sensorLength.second;
+  float posInPixel_v = std::fmod(posShifted_v, pixelPitch.second);
+  posInPixel_v -= 0.5 * pixelPitch.second;
+
+  return dd4hep::rec::Vector3D(posInPixel_u, posInPixel_v, pos_local.z());
+}
+
 /* -- HitMap -- */
 
 HitMap::HitMap(std::pair<size_t, size_t> pixelCount) : m_pixCount(pixelCount) {

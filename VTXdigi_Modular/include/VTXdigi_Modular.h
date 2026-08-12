@@ -329,9 +329,11 @@ private:
   > m_hist1dglobal;
 
   enum {
-    histProfile1dglobal_etaFunction_u,
-    histProfile1dglobal_etaFunction_v,
-    histProfile1dglobalArrayLen
+    histProfile1dGlobal_etaFunction_u,
+    histProfile1dGlobal_etaFunction_v,
+    histProfile1dGlobal_etaDistribution_u,
+    histProfile1dGlobal_etaDistribution_v,
+    histProfile1dGlobalArrayLen
   };
   std::array<
     std::unique_ptr<
@@ -341,6 +343,22 @@ private:
         float
       >
     >,
-    histProfile1dglobalArrayLen
-  > m_histProfile1dglobal;
+    histProfile1dGlobalArrayLen
+  > m_histProfile1dGlobal;
+
+  enum {
+    hist2dGlobal_etaDistribution_u,
+    hist2dGlobal_etaDistribution_v,
+    hist2dGlobalArrayLen
+  };
+  std::array<
+    std::unique_ptr<
+      Gaudi::Accumulators::StaticHistogram<
+        2,
+        Gaudi::Accumulators::atomicity::full,
+        float
+      >
+    >,
+    hist2dGlobalArrayLen
+  > m_hist2dGlobal;
 }; // class VTXdigi_Modular

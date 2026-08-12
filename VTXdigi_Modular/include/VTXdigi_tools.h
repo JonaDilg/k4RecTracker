@@ -245,9 +245,7 @@ std::pair<int, int> ComputePixelIndices(const dd4hep::rec::Vector3D& pos, const 
 std::array<int, 3> ComputeInPixelIndices(const dd4hep::rec::Vector3D& pos, const std::array<int, 3>& binCount, const std::pair<float, float>& pixelPitch, const std::array<float, 3>& activeVolumeDimensions);
 
 /** @brief Compute the center position of a given pixel (i_u,i_v) in sensor-local coordinates (u,v,w)
- *
- * @note The w coordinate is set to depletedRegionDepthCenter. 0 for center, +25 for sensor surface, +20 for TPSCo 65nm maps.
-*/
+ * @note The w coordinate is set to depletedRegionDepthCenter. 0 for center, +25 for sensor surface, +20 for TPSCo 65nm maps. */
 dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::pair<int, int> pixelIndex, const std::pair<float, float> sensorLength,  const std::pair<float, float> pixelPitch, float depletedRegionDepthCenter);
 /** @brief Compute the center position of a given pixel (i_u,i_v) in sensor-local coordinates (u,v,0) */
 dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::pair<int, int> pixelIndex, const std::pair<float, float> sensorLength, const std::pair<float, float> pixelPitch);
@@ -255,13 +253,15 @@ dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::pair<int, int> pix
 /** @brief Compute the position of a given (pixel-)index (i_u,i_v) in sensor-local coordinates (u,v,0) .
  * @note index 0 indicates the center of the pixel, index -0.5 the lower edge and +0.5 the upper edge.
  * @note Does not check if the position is within the sensor bounds!
- * @note The w coordinate is set to depletedRegionDepthCenter. 0 for center, +25 for sensor surface, +20 for TPSCo 65nm maps.
- */
+ * @note The w coordinate is set to depletedRegionDepthCenter. 0 for center, +25 for sensor surface, +20 for TPSCo 65nm maps. */
 dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::pair<float, float> index, const std::pair<float, float> sensorLength,  const std::pair<float, float> pixelPitch, float depletedRegionDepthCenter);
 /** @brief Compute the position of a given (pixel-)index (i_u,i_v) in sensor-local coordinates (u,v,0) .
  * @note index 0 indicates the center of the pixel, index -0.5 the lower edge and +0.5 the upper edge.
- * @note Does not check if the position is within the sensor bounds!
- */
+ * @note Does not check if the position is within the sensor bounds! */
 dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::pair<float, float> index, const std::pair<float, float> sensorLength, const std::pair<float, float> pixelPitch);
+
+/** @brief Compute in-pixel position for a given local position (inside the sensor)
+ * @note the coordinate system is centred at the pixel centre */
+dd4hep::rec::Vector3D ComputeInPixelPos(const dd4hep::rec::Vector3D& pos_local, const std::pair<float, float> pixelPitch, const std::pair<float, float>& sensorLength);
 
 } // namespace VTXdigi_tools

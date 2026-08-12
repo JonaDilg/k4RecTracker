@@ -510,6 +510,14 @@ void VTXdigi_Modular::InitHistograms() {
     static_cast<unsigned int>(m_pixelCount.second),
     -0.5f,
     static_cast<float>(m_pixelCount.second+0.5)};
+  Gaudi::Accumulators::Axis<float> axis_inpix_u{
+    100,
+    -1.f * m_pixelPitch.first/2.f * 1000.f,
+    m_pixelPitch.first/2.f * 1000.f};
+  Gaudi::Accumulators::Axis<float> axis_inpix_v{
+    100,
+    -1.f * m_pixelPitch.second/2.f * 1000.f,
+    m_pixelPitch.second/2.f * 1000.f};
 
   Gaudi::Accumulators::Axis<float> axis_pathLength{500, 0.f, m_sensorActiveThickness*1000.f*10.f};
   Gaudi::Accumulators::Axis<float> axis_pathTravel{1000, -m_sensorActiveThickness*1000.f*10.f, m_sensorActiveThickness*1000.f*10.f};
@@ -1128,14 +1136,14 @@ void VTXdigi_Modular::InitHistograms() {
     unsigned int nBins_v = 2*m_etaFunction.value().GetNBins(1);
     // doubling the bin-number is necessary to get correct binning from constant-width histograms, see all the comments on even/odd case in ChargeCollector_impl.cpp LookupTable::ComputeEtaFunction()
 
-    m_histProfile1dglobal.at(histProfile1dglobal_etaFunction_u).reset(
+    m_histProfile1dGlobal.at(histProfile1dGlobal_etaFunction_u).reset(
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Global/etaFunction_u",
         "Eta function in u direction;u position (from pixel centre to the neighbor pixel's centre);Eta function value",
         {nBins_u, 0.f, 1.f}
       }
     );
-    m_histProfile1dglobal.at(histProfile1dglobal_etaFunction_v).reset(
+    m_histProfile1dGlobal.at(histProfile1dGlobal_etaFunction_v).reset(
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Global/etaFunction_v",
         "Eta function in v direction;v position (from pixel centre to the neighbor pixel's centre);Eta function value",
@@ -1146,17 +1154,49 @@ void VTXdigi_Modular::InitHistograms() {
     // directly fill the hists with the eta function
     for (unsigned int i_bin=0; i_bin < nBins_u; ++i_bin) {
       const float binCenter = 1.f / static_cast<float>(nBins_u) * (static_cast<float>(i_bin) + 0.5f);
-      (*m_histProfile1dglobal.at(histProfile1dglobal_etaFunction_u))[ binCenter ] += m_etaFunction.value().GetEta(0, binCenter);
+      (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaFunction_u))[ binCenter ] += m_etaFunction.value().GetEta(0, binCenter);
     }
     for (unsigned int i_bin=0; i_bin < nBins_v; ++i_bin) {
       const float binCenter = 1.f / static_cast<float>(nBins_v) * (static_cast<float>(i_bin) + 0.5f);
-      (*m_histProfile1dglobal.at(histProfile1dglobal_etaFunction_v))[ binCenter ] += m_etaFunction.value().GetEta(1, binCenter);
+      (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaFunction_v))[ binCenter ] += m_etaFunction.value().GetEta(1, binCenter);
     }
     debug() << "Filled eta function histograms with " << nBins_u << " bins in u and " << nBins_v << " bins in v." << endmsg;
   }
   else {
     debug() << "No eta function provided, skipping creation of global histograms for eta function." << endmsg;
   }
+
+  m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_u).reset(
+    new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+      "Global/etaDistribution_u",
+      "Measured eta distribution in u direction (dependence of the in-pix reco position on the in-pix truth position) (only valid for single-sensor detector model in vacuum);in-pixel cluster centre of gravity in u for 2-pix clusters (um);in-pixel truth position in u (um)",
+      axis_inpix_u
+    }
+  );
+  m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_v).reset(
+    new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+      "Global/etaDistribution_v",
+      "Measured eta distribution in v direction (dependence of the in-pix reco position on the in-pix truth position) (only valid for single-sensor detector model in vacuum);in-pixel cluster centre of gravity in v for 2-pix clusters (um);in-pixel truth position in v (um)",
+      axis_inpix_v
+    }
+  );
+
+  m_hist2dGlobal.at(hist2dGlobal_etaDistribution_u).reset(
+    new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float> {this,
+      "Global/etaDistribution_u_2D",
+      "Measured eta distribution in u direction (dependence of the in-pix reco position on the in-pix truth position) (only valid for single-sensor detector model in vacuum);in-pixel cluster centre of gravity in u for 2-pix clusters (um);in-pixel truth position in u (um)",
+      axis_inpix_u,
+      axis_inpix_u
+    }
+  );
+  m_hist2dGlobal.at(hist2dGlobal_etaDistribution_v).reset(
+    new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float> {this,
+      "Global/etaDistribution_v_2D",
+      "Measured eta distribution in v direction (dependence of the in-pix reco position on the in-pix truth position) (only valid for single-sensor detector model in vacuum);in-pixel cluster centre of gravity in v for 2-pix clusters (um);in-pixel truth position in v (um)",
+      axis_inpix_v,
+      axis_inpix_v
+    }
+  );
 }
 
 /* ---- Eventloop functions ---- */
@@ -1421,6 +1461,20 @@ void VTXdigi_Modular::FillHistograms_perDigiHit(const VTXdigi_tools::Cluster& cl
 
       ++(*m_hist1d.at(layer).at(hist1d_residual_u_toPrimaries))[ residual_local.x()*1000.f ];
       ++(*m_hist1d.at(layer).at(hist1d_residual_v_toPrimaries))[ residual_local.y()*1000.f ];
+
+      const dd4hep::rec::Vector3D simHitPos_inPix = VTXdigi_tools::ComputeInPixelPos(simHitPos_local, m_pixelPitch, m_sensorLength);
+      const dd4hep::rec::Vector3D pos_inPix = VTXdigi_tools::ComputeInPixelPos(pos_local, m_pixelPitch, m_sensorLength);
+
+      if (cluster.GetSize(0) == 2) {
+        (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_u))[ simHitPos_inPix.x() * 1000.f ] += pos_inPix.x() * 1000.f; // convert to um
+        ++(*m_hist2dGlobal.at(hist2dGlobal_etaDistribution_u))[ {simHitPos_inPix.x() * 1000.f, pos_inPix.x() * 1000.f} ]; // convert to um
+      }
+
+      if (cluster.GetSize(1) == 2) {
+        (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_v))[ simHitPos_inPix.y() * 1000.f ] += pos_inPix.y() * 1000.f; // convert to um
+        ++(*m_hist2dGlobal.at(hist2dGlobal_etaDistribution_v))[ {simHitPos_inPix.y() * 1000.f, pos_inPix.y() * 1000.f} ]; // convert to um
+      }
+
     }
     else if (mcParticleLevel == VTXdigi_tools::MCParticleLevel::Secondary) {
       ++(*m_hist1d.at(layer).at(hist1d_clusterSize_causedBySecondary))[ cluster.GetSize() ];
@@ -1467,8 +1521,8 @@ void VTXdigi_Modular::FillHistograms_perSensor(const std::vector<VTXdigi_tools::
     }
   } // loop to find simHit with highest MCParticle energy.
 
-  const VTXdigi_tools::SimHitWrapper& simHit = simHits.at(maxE_index);
-  const dd4hep::rec::Vector3D simHitPos_local = simHit.truthPos();
+  const VTXdigi_tools::SimHitWrapper& simHitMaxE = simHits.at(maxE_index);
+  const dd4hep::rec::Vector3D simHitMaxE_pos_local = simHitMaxE.truthPos();
 
   ++(*m_hist1d.at(layer).at(hist1d_highestEnergyParticleOnSensor_energy))[ maxE ]; // in GeV
 
@@ -1476,7 +1530,7 @@ void VTXdigi_Modular::FillHistograms_perSensor(const std::vector<VTXdigi_tools::
     const dd4hep::rec::Vector3D pos_global = VTXdigi_tools::ConvertVector(digiHit.getPosition());
     const dd4hep::rec::Vector3D pos_local = VTXdigi_tools::GlobalToLocal(pos_global, trafoMatrix);
 
-    const dd4hep::rec::Vector3D residual_local = pos_local - simHitPos_local; // residual = observed - predicted
+    const dd4hep::rec::Vector3D residual_local = pos_local - simHitMaxE_pos_local; // residual = observed - predicted
 
     ++(*m_hist1d.at(layer).at(hist1d_residual_u_maxEParticleOnSensor))[ residual_local.x()*1000.f ];
     ++(*m_hist1d.at(layer).at(hist1d_residual_v_maxEParticleOnSensor))[ residual_local.y()*1000.f ];
