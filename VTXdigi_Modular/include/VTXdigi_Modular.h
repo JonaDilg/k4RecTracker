@@ -133,6 +133,8 @@ private:
   Gaudi::Property<float> m_smearing_charge{this, "ChargeSmearing", 0.0f, "Gaussian smearing to be applied to a pixels collected charge (in e-). Applied after charge collection but before thresholding. If 0, no noise is applied. Defaults to 0."};
   Gaudi::Property<float> m_smearing_threshold{this, "ThresholdDispersion", 0.0f, "Gaussian smearing to be applied to the threshold. (in e-). Drawn per event per sensor per pixel. If 0, no dispersion is applied. Defaults to 0."};
   Gaudi::Property<float> m_smearing_time{this, "TimeSmearing", 0.0f, "Gaussian smearing to be applied to a pixels time (in ns). Applied to the digiHits time stamp. If 0, no time smearing is applied. Defaults to 0."};
+  Gaudi::Property<bool> m_eta_correct{this, "ApplyEtaCorrection", false, "Flag to apply eta correction to the cluster positions (errors if no eta distribution function is available). Defaults to false."};
+  Gaudi::Property<bool> m_eta_distribution_from_chargeCollector{this, "ExtractEtaDistributionFromChargeCollector", false, "Flag to extract eta distribution from the charge collector. Only used if ApplyEtaCorrection is true."};
 
   Gaudi::Property<bool> m_debugHistograms{this, "DebugHistograms", false, "Flag to create and fill debug histograms. Not recommended for multithreading, might lead to crashes. Default is false."};
   Gaudi::Property<int> m_infoPrintInterval{this, "InfoPrintInterval", 100, "Interval for printing information during processing."};
@@ -141,7 +143,6 @@ private:
   Gaudi::Property<std::string> m_LUT_FileName{this, "LookupTableFile", "", "File to load the lookup table from. Must be given if ChargeCollectionMethod is set to \"LookupTable\"."};
   Gaudi::Property<bool> m_LUT_ignorePitch{this, "LookupTableIgnorePitch", false, "Ignore the sensor thickness and pixel pitch values stored in the LUT file. Useful for slightly stretching/shrinking the LUT to fit curved sensors where the sensor length is not an integer multiple of the pixel pitch. If empty, the LUT file values are used."};
   Gaudi::Property<bool> m_LUT_shiftTruthPos{this, "LookupTableShiftTruthPosition", false, "Internally shift the truth position of the simHit. Only affects the output histograms, does not affect any collection. If turned to false, angled particle trajectories will bias the residual plots in case of LUT tables with uneven charge collection across the sensor thickness."};
-  Gaudi::Property<bool> m_LUT_extractEtaDistribution{this, "LookupTableExtractEtaDistribution", false, "Extract the eta distribution from the LUT file. Only used if ChargeCollectionMethod is set to \"LookupTable\"."};
 
   /* -- Services, geometry variables -- */
 

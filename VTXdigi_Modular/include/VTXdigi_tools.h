@@ -18,6 +18,8 @@ namespace VTXdigi_tools {
 
 constexpr float kChargePerkeV = 273.97f; // in electrons, for silicon (1 eh-pair ~ 3.65 eV)
 
+class EtaDistribution;
+
 /* -- SimHitWrapper -- */
 
 enum class MCParticleLevel {
@@ -99,15 +101,21 @@ struct Cluster {
   inline int GetSize() const { return pixels.size(); };
   int GetSize(const int axis) const; // axis = 0 for u, 1 for v.
 
-  /** @brief Compute the center position of a cluster via charge-weighed center of gravity in terms of pixel indices */
-  std::array<float, 2> ComputePos() const;
-
-  /** @brief Compute the uncertainty of the cluster position via charge-weighed center of gravity in terms of pixel indices */
-  std::array<float, 2> ComputePosUncertainty_ChargeWeighted() const;
-  std::array<float, 2> ComputePosUncertainty_ChargeWeighted(const std::array<float, 2>& clusterPos) const;
-
   /** @brief get the charge in the seed pixel (eg. pixel with the highest charge) */
   float GetSeedPixelCharge() const;
+
+  /** @brief Compute the charge-weighted centre-of-gravity of a cluster in terms of pixel inx coordinates
+   * @returns CoG in terms of pixel index coordinates */
+  std::array<float, 2> ComputeCoG() const;
+
+  /** @brief Compute the charge-weighted centre-of-gravity of a cluster in terms of pixel inx coordinates
+   * @param etaDistrib EtaDistribution object to correct the CoG for charge collection biases
+   * @returns CoG in terms of pixel index coordinates */
+  std::array<float, 2> ComputeCoG_EtaCorrected(const EtaDistribution& etaDistrib) const;
+
+  /** @brief Compute the uncertainty of the charge-weighted centre-of-gravity of a cluster in terms of pixel index coordinates
+   * @param pos This cluster's CoG (to avoid re-computing it) in terms of pixel index coordinates */
+  std::array<float, 2> ComputeCoGUncertainty(const std::array<float, 2>& pos) const;
 };
 
 /** @brief Get the indices of all direct neighbors of a pixel */
@@ -121,21 +129,24 @@ std::array<std::array<int, 2>, 8> GetNeighbors(const std::array<int, 2>& i_uv);
  * @note Per LUT bin along the u (v) axis, the function encodes the center of gravity position of a cluster that would be caused by charges in this bin
  * This implementation follows the idea of https://arxiv.org/pdf/2107.06600*/
 class EtaDistribution {
-  const std::array<std::vector<float>, 2> m_values;
+  const std::array<std::vector<std::pair<float, float>>, 2> m_distributionPoints;
+  std::array<std::vector<float>, 2> m_slopes; // pre-computed slopes for the linear interpolation
+  // slopes[0] is slope between points[0] and points[1]
 
 public:
-  EtaDistribution(std::array<std::vector<float>, 2> values);
+  EtaDistribution(std::array<std::vector<std::pair<float, float>>, 2> DistributionPoints);
 
-  inline unsigned int GetNBins(const int axis) const { return m_values.at(axis).size(); };
+  inline unsigned int GetNBins(const int axis) const { return m_distributionPoints.at(axis).size(); };
   inline std::array<unsigned int, 2> GetNBins() const { return {GetNBins(0), GetNBins(1)}; };
 
   /** @brief Get the collection center of gravity along a axis for an in-pixel bin
    * @returns CoG in terms of in-pixel coordinate t [-0.5, 0.5] */
   float GetCollectionCoG_Bin(const int axis, const unsigned int bin) const;
 
-  // /** @brief Get the collection center of gravity for along a axis for an in-pixel position in terms of t [-.5, .5]
-  //  * @returns CoG in terms of in-pixel coordinate t [-0.5, 0.5] */
-  // float GetCollectionCoG_inPix(const int axis, const float t) const;
+  /** @brief Correct a given in-pixel position (cluster CoG) along an axis using the eta distribution
+   * @param pos In-pixel position (uncorrected cluster CoG) in terms of in-pix coordinate t [-0.5, 0.5]
+   * @returns Corrected CoG in terms of in-pix coordinate t [-0.5, 0.5] */
+  float Correct(const int axis, const float pos) const;
 };
 
 /* -- HitMap -- */

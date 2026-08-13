@@ -81,7 +81,7 @@ public:
   inline int GetBinCount(int i) const { return m_binCount.at(i); }
   inline Index_inPix GetBinCount() const { return m_binCount; }
 
-  std::array<std::vector<float>, 2> ComputeEtaDistribution() const;
+  std::array<std::vector<std::pair<float, float>>, 2> ComputeEtaDistribution() const;
 
 private:
 
@@ -108,7 +108,7 @@ public:
 
   void FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix) const override;
 
-  std::optional<std::array<std::vector<float>,2>> ComputeEtaDistribution() const override {
+  std::optional< std::array<std::vector<std::pair<float, float>>, 2> > ComputeEtaDistribution() const override {
     return std::make_optional(m_LUT.ComputeEtaDistribution());
   };
 

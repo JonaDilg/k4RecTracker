@@ -23,7 +23,7 @@ public:
    * @return An optional array containing the eta distribution values in u and v, or std::nullopt if not applicable in the selected implementation
    * @note For an even binning across a single pixel, the vector contains the charge collection centre of gravity for each bin
    * @note Implemeted such to stop LUT implementation details from leaking into the digitizer */
-  virtual std::optional< std::array<std::vector<float>, 2> > ComputeEtaDistribution() const { return std::nullopt; }
+  virtual std::optional< std::array<std::vector<std::pair<float, float>>, 2> > ComputeEtaDistribution() const { return std::nullopt; }
 
   float GetChargeCollectionDepthCenter() const { return m_chargeCollectionDepthCenter; }
 

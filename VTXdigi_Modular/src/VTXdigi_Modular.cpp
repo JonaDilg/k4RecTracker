@@ -27,18 +27,20 @@ StatusCode VTXdigi_Modular::initialize() {
   verbose() << "Initializing charge collection method: " << m_chargeCollectionMethod.value() << endmsg;
   m_chargeCollector = VTXdigi_tools::CreateChargeCollector(*this, m_chargeCollectionMethod);
 
-  if (m_LUT_extractEtaDistribution.value()) {
-    debug() << " - Extracting eta distribution from charge collector..." << endmsg;
-    auto etaDistrib = m_chargeCollector->ComputeEtaDistribution();
+  if (m_eta_correct.value()) {
+    if (m_eta_distribution_from_chargeCollector.value()) {
+      debug() << " - Extracting eta distribution from charge collector..." << endmsg;
 
-    if (etaDistrib) {
-      debug() << "   - Found eta distribution" << endmsg;
+      auto etaDistrib = m_chargeCollector->ComputeEtaDistribution();
+      verbose() << " - Extracted eta dustribution from charge collector" << endmsg;
+      if (!etaDistrib) {
+        error() << " - Failed to extract eta distribution from charge collector" << endmsg;
+      }
       m_etaDistribution.emplace(std::move(*etaDistrib)); // there is no copy-constructor
-      info() << " - Extracted eta distribution from charge collector. It has " << m_etaDistribution->GetNBins(0) << " bins in u and " << m_etaDistribution->GetNBins(1) << " bins in v." << endmsg;
-      if (!m_etaDistribution)
-        error() << "Failed to set m_etaDistribution." << endmsg;
-      else
-        debug() << "Successfully set m_etaDistribution." << endmsg;
+      info() << " - Successfully set eta distribution by extracting it from charge collector" << endmsg;
+    }
+    else {
+      error() << " - ApplyEtaCorrection is true, but m_LUT_extractEtaDistribution is false. As of now, the only way of loading an eta distribution is by extracting it from the LUT." << endmsg;
     }
   }
 
@@ -122,7 +124,6 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
       hitMap.ApplyThreshold(m_threshold.value(), m_smearing_threshold.value() > 0.f ? &m_rndm_threshold : nullptr);
 
     std::vector<VTXdigi_tools::Cluster> clusters = Clusterize(hitMap);
-
 
     CreateDigiHits(digiHits, digiHitLinks, volumeID, trafoMatrix, clusters);
     if (m_debugHistograms.value())
@@ -1142,14 +1143,14 @@ void VTXdigi_Modular::InitHistograms() {
     m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_derived_u).reset(
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Global/etaDistribution_derived_u",
-        "Eta function in u direction;u position (from pixel centre to the neighbor pixel's centre);Eta function value",
+        "Eta distribution in u direction as derived from the LUT;In-pixel charge deposition position [um];Cluster centre of gravity in u direction [um]",
         { nBins[0], -0.5f * m_pixelPitch.at(0) * 1000.f, 0.5f * m_pixelPitch.at(0) * 1000.f }
       }
     );
     m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_derived_v).reset(
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Global/etaDistribution_derived_v",
-        "Eta function in v direction;v position (from pixel centre to the neighbor pixel's centre);Eta function value",
+        "Eta distribution in v direction as derived from the LUT;In-pixel charge deposition position [um];Cluster centre of gravity in v direction [um]",
         { nBins[1], -0.5f * m_pixelPitch.at(1) * 1000.f, 0.5f * m_pixelPitch.at(1) * 1000.f }
       }
     );
@@ -1169,14 +1170,14 @@ void VTXdigi_Modular::InitHistograms() {
   m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_measured_u).reset(
     new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
       "Global/etaDistribution_measured_u",
-      "Measured eta distribution in u direction (dependence of the in-pix reco position on the in-pix truth position) (only valid for single-sensor detector model in vacuum);in-pixel cluster centre of gravity in u for 2-pix clusters (um);in-pixel truth position in u (um)",
+      "Eta distribution in u direction as \"measured\" from the digiHits (only valid for single-sensor detector model in vacuum);In-pixel cluster centre of gravity in u for 2-pix clusters (um);in-pixel truth position in u (um)",
       axis_inpix_u
     }
   );
   m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_measured_v).reset(
     new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
       "Global/etaDistribution_measured_v",
-      "Measured eta distribution in v direction (dependence of the in-pix reco position on the in-pix truth position) (only valid for single-sensor detector model in vacuum);in-pixel cluster centre of gravity in v for 2-pix clusters (um);in-pixel truth position in v (um)",
+      "Eta distribution in v direction as \"measured\" from the digiHits (only valid for single-sensor detector model in vacuum);In-pixel cluster centre of gravity in v for 2-pix clusters (um);in-pixel truth position in v (um)",
       axis_inpix_v
     }
   );
@@ -1184,7 +1185,7 @@ void VTXdigi_Modular::InitHistograms() {
   m_hist2dGlobal.at(hist2dGlobal_etaDistribution_u).reset(
     new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float> {this,
       "Global/etaDistribution_u_2D",
-      "Measured eta distribution in u direction (dependence of the in-pix reco position on the in-pix truth position) (only valid for single-sensor detector model in vacuum);in-pixel cluster centre of gravity in u for 2-pix clusters (um);in-pixel truth position in u (um)",
+      "Eta distribution in u direction as \"measured\" from the digiHits (only valid for single-sensor detector model in vacuum);In-pixel cluster centre of gravity in u for 2-pix clusters (um);in-pixel truth position in u (um)",
       axis_inpix_u,
       axis_inpix_u
     }
@@ -1192,7 +1193,7 @@ void VTXdigi_Modular::InitHistograms() {
   m_hist2dGlobal.at(hist2dGlobal_etaDistribution_v).reset(
     new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float> {this,
       "Global/etaDistribution_v_2D",
-      "Measured eta distribution in v direction (dependence of the in-pix reco position on the in-pix truth position) (only valid for single-sensor detector model in vacuum);in-pixel cluster centre of gravity in v for 2-pix clusters (um);in-pixel truth position in v (um)",
+      "Eta distribution in v direction as \"measured\" from the digiHits (only valid for single-sensor detector model in vacuum);In-pixel cluster centre of gravity in v for 2-pix clusters (um);in-pixel truth position in v (um)",
       axis_inpix_v,
       axis_inpix_v
     }
@@ -1270,7 +1271,16 @@ void VTXdigi_Modular::CreateDigiHits(edm4hep::TrackerHitPlaneCollection& digiHit
     digiHit.setEDep(cluster.charge / VTXdigi_tools::kChargePerkeV);
 
     // position
-    const std::array<float, 2> clusterPos_index = cluster.ComputePos();
+    std::array<float, 2> clusterPos_index({0.f, 0.f});
+    if (m_eta_correct.value() && m_etaDistribution) {
+      verbose() << "     - Determining eta-corrected cluster position." << endmsg;
+      clusterPos_index = cluster.ComputeCoG_EtaCorrected(m_etaDistribution.value());
+    }
+    else {
+      verbose() << "     - Determining cluster position (without eta correction)." << endmsg;
+      clusterPos_index = cluster.ComputeCoG();
+    }
+
     const dd4hep::rec::Vector3D clusterPos_local = VTXdigi_tools::ComputePosFromPixIndex_local(clusterPos_index, m_sensorLength, m_pixelPitch, m_chargeCollector->GetChargeCollectionDepthCenter());
     const dd4hep::rec::Vector3D clusterPos_global = VTXdigi_tools::LocalToGlobal(clusterPos_local, trafoMatrix);
     debug() << "     - Found cluster with " << cluster.pixels.size() << " pixels, charge " << cluster.charge << ", center at (" << clusterPos_index[0] << ", " << clusterPos_index[1] << "). Has " << cluster.simHits.size() << " contributing simHits." << endmsg;
@@ -1280,7 +1290,7 @@ void VTXdigi_Modular::CreateDigiHits(edm4hep::TrackerHitPlaneCollection& digiHit
     digiHit.setU(direction_u);
     digiHit.setV(direction_v);
     if (m_positionUncertainty.value().empty()) {
-      std::array<float, 2> clusterPos_unc = cluster.ComputePosUncertainty_ChargeWeighted(clusterPos_index);
+      std::array<float, 2> clusterPos_unc = cluster.ComputeCoGUncertainty(clusterPos_index);
       digiHit.setDu(clusterPos_unc[0] * m_pixelPitch[0]);
       digiHit.setDv(clusterPos_unc[1] * m_pixelPitch[1]);
     }

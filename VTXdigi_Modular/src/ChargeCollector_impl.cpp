@@ -250,7 +250,7 @@ LookupTable::LookupTable(const std::string& lutFileName, const VTXdigi_Modular& 
   lutFile.clear();
   lutFile.seekg(0, std::ios::beg);
   for (int i=0; i<headerLines; ++i) // advance past header again
-  std::getline(lutFile, line);
+    std::getline(lutFile, line);
 
   digitizer.debug() << "   - Parsing LUT file, filling into lookup table." << endmsg;
 
@@ -378,23 +378,23 @@ int LookupTable::FindIndex (const Index_inPix& j, const int col, const int row) 
   return index_matrix * m_matrixSize * m_matrixSize + index_element;
 }
 
-std::array<std::vector<float>, 2> LookupTable::ComputeEtaDistribution() const {
+std::array<std::vector<std::pair<float, float>>, 2> LookupTable::ComputeEtaDistribution() const {
 
   // for each bin along the u/v axis, compute the centre of gravity of a cluster that is formed by charges deposited evenly across this slice. This is used to compute the eta distribution for charge sharing.
-  std::array<std::vector<float>, 2> etaDistributions;
+  std::array<std::vector<std::pair<float, float>>, 2> etaDistributions;
 
   // loop over bins in the u/v axis
   for (int i_axis = 0; i_axis < 2; ++i_axis) {
-    std::cout << "Computing eta distribution for axis " << i_axis << std::endl;
+    etaDistributions.at(i_axis).emplace_back(-0.5f, -0.5f); // fix first entry
 
     const int n_bins = m_binCount[i_axis];
     const int i_otherAxis = (i_axis == 0) ? 1 : 0;
     const int n_bins_otherAxis = m_binCount[i_otherAxis];
 
-    std::vector<float> binCollectionCoG(n_bins, 0.f);
-
     // loop over slices through the LUT along the axis (ie. loop over bins)
     for (int i_bin_axis = 0; i_bin_axis < n_bins; ++i_bin_axis) {
+
+
       // per slice: compute the centre of gravity along the axis of a cluster that is formed by charges deposited evenly across this slice
 
       std::vector<float> projectedMatrix(m_matrixSize, 0.f);
@@ -431,9 +431,10 @@ std::array<std::vector<float>, 2> LookupTable::ComputeEtaDistribution() const {
       }
       pos /= pos_weights; // normalise to get center of gravity
 
-      std::cout << "emplacing eta distribution value at axis " << i_axis << ", bin " << i_bin_axis << ": " << pos << std::endl;
-      etaDistributions.at(i_axis).emplace_back(pos);
+      float binCenter = (static_cast<float>(i_bin_axis) + 0.5f) / static_cast<float>(n_bins) - 0.5f; // bin center in [-0.5,0.5] range
+      etaDistributions.at(i_axis).emplace_back(binCenter, pos);
     } // loop over bins along axis
+    etaDistributions.at(i_axis).emplace_back(0.5f, 0.5f); // fix last entry
   } // u/v axis
 
   return etaDistributions;

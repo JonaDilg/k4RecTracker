@@ -326,24 +326,66 @@ inline bool HitMap::_OutOfBounds(std::array<int, 2> i_uv) const {
 
 /* -- Eta function -- */
 
-EtaDistribution::EtaDistribution(std::array<std::vector<float>, 2> values) : m_values(std::move(values)) {
-  if (m_values[0].empty() || m_values[1].empty())
+EtaDistribution::EtaDistribution(std::array<std::vector<std::pair<float, float>>, 2> points) : m_distributionPoints(std::move(points)) {
+  if (m_distributionPoints[0].empty() || m_distributionPoints[1].empty())
     throw std::runtime_error("EtaDistribution: distribution values cannot be empty");
+  for (int i_axis=0; i_axis < 2; ++i_axis) {
+    if (m_distributionPoints[i_axis].front().first != -0.5f || m_distributionPoints[i_axis].front().second != -0.5f || m_distributionPoints[i_axis].back().first != 0.5f || m_distributionPoints[i_axis].back().second != 0.5f )
+      throw std::runtime_error("EtaDistribution: distribution values must start at (-0.5, -0.5) and end at (0.5, 0.5)");
 
-  // TODO: implement checks that the values are monotonically increasing (per axis)
+    // pre-compute slope between each pair of points for linear interpolation
+    const unsigned int n_points = m_distributionPoints[i_axis].size();
+    for (size_t i_point=0; i_point<n_points-1; ++i_point) {
+      const auto& [x0, y0] = m_distributionPoints.at(i_axis).at(i_point);
+      const auto& [x1, y1] = m_distributionPoints.at(i_axis).at(i_point + 1);
+
+      // check that x-values are monotonically increasing
+      if (x1 <= x0)
+        throw std::runtime_error("EtaDistribution: x-values for axis " + std::to_string(i_axis) + " are not monotonically increasing (points " + std::to_string(i_point) + " and " + std::to_string(i_point+1) + ", vals (" + std::to_string(x0) + ", " + std::to_string(x1) + "))");
+      // doing this check for y-values is not strictly necessary and did lead to numerical issues for flat bits of the distribution
+
+      m_slopes[i_axis].push_back((y1 - y0) / (x1 - x0));
+    }
+
+    if (m_slopes[i_axis].size() != n_points - 1)
+      throw std::runtime_error("EtaDistribution: number of slopes (" + std::to_string(m_slopes[i_axis].size()) + ") for axis " + std::to_string(i_axis) + " does not match number of points (" + std::to_string(n_points) + ")");
+  }
 }
 
 float EtaDistribution::GetCollectionCoG_Bin(const int axis, const unsigned int bin) const {
-    if (axis != 0 && axis != 1)
-      throw std::runtime_error("VTXdigi_tools::EtaDistribution::GetBinCollectionCoG: axis must be 0 or 1");
-    if (bin >= m_values.at(axis).size())
-      throw std::runtime_error("VTXdigi_tools::EtaDistribution::GetBinCollectionCoG: bin out of range");
-    return m_values.at(axis).at(bin);
+  if (axis != 0 && axis != 1)
+    throw std::runtime_error("VTXdigi_tools::EtaDistribution::GetBinCollectionCoG: axis must be 0 or 1");
+  if (bin >= m_distributionPoints.at(axis).size())
+    throw std::runtime_error("VTXdigi_tools::EtaDistribution::GetBinCollectionCoG: bin out of range");
+  return m_distributionPoints.at(axis).at(bin).second;
+}
+
+float EtaDistribution::Correct(const int axis, const float pos) const {
+  if (axis != 0 && axis != 1)
+    throw std::runtime_error("VTXdigi_tools::EtaDistribution::Correct: axis must be 0 or 1");
+  if (pos < -0.5f || pos >= 0.5f)
+    throw std::runtime_error("VTXdigi_tools::EtaDistribution::Correct: pos must be in [-0.5, 0.5]");
+
+  const int n_points = static_cast<int>(m_distributionPoints.at(axis).size());
+
+  // find after which bin-centre the position lies
+  int i_point = 0;
+  for (int i = 1; i < n_points; ++i) {
+    if (m_distributionPoints.at(axis).at(i).first > pos)
+      break;
+    i_point = i;
   }
+
+  // linear interpolation between the two nearest points
+  const float x0 = m_distributionPoints.at(axis).at(i_point).first;
+  const float y0 = m_distributionPoints.at(axis).at(i_point).second;
+  const float slope = m_slopes.at(axis).at(i_point);
+  return y0 + slope * (pos - x0);
+}
 
 /* -- Clusterization -- */
 
-std::array<float, 2> Cluster::ComputePos() const {
+std::array<float, 2> Cluster::ComputeCoG() const {
   std::array<float, 2> pos{0.f, 0.f};
   for (const Pixel* pix : pixels) {
     pos[0] += pix->index[0] * pix->charge;
@@ -351,6 +393,43 @@ std::array<float, 2> Cluster::ComputePos() const {
   }
   pos[0] /= charge;
   pos[1] /= charge;
+  return pos;
+}
+
+std::array<float, 2> Cluster::ComputeCoG_EtaCorrected(const EtaDistribution& etaDistrib) const {
+  std::array<float, 2> pos{0.f, 0.f};
+
+  for (int i_axis=0; i_axis<2; ++i_axis) {
+    const int clstLength = GetSize(i_axis);
+    if (clstLength == 1) {
+      // no eta correction
+      pos[i_axis] = pixels.front()->index[i_axis];
+    }
+    else {
+      // apply eta correction for clusters of length >= 2 (for longer clusters, only consider the first and last pixels along this axis, a la https://cds.cern.ch/record/687475/files/note02_049.pdf)
+
+      // find pixels in first and last bin along this axis
+      int i_first=std::numeric_limits<int>::max(), i_last=std::numeric_limits<int>::min();
+      for (const Pixel* pix : pixels) {
+        i_first = std::min(i_first, pix->index[i_axis]);
+        i_last = std::max(i_last, pix->index[i_axis]);
+      }
+
+      // sum up charge in first and last bin
+      float charge_first=0.f, charge_last=0.f;
+      for (const Pixel* pix : pixels) {
+        if (pix->index[i_axis] == i_first)
+          charge_first += pix->charge;
+        else if (pix->index[i_axis] == i_last)
+          charge_last += pix->charge;
+      }
+
+      // compute pos offset along the axis (as if the cluster was 2 pixels long)
+      float pos_offset = (charge_last - charge_first) / (charge_last + charge_first) / 2.f; // in (-0.5, 0.5)
+      pos_offset = etaDistrib.Correct(i_axis, pos_offset); // apply eta correction
+      pos[i_axis] = static_cast<float>(i_first + i_last)/2.f + pos_offset; // add offset to the center of the first and last pixel
+    }
+  }
   return pos;
 }
 
@@ -377,7 +456,7 @@ int Cluster::GetSize(const int axis) const {
   return max - min + 1; // +1 because of counting: if min=max, cluster size is 1, not 0
 }
 
-std::array<float, 2> Cluster::ComputePosUncertainty_ChargeWeighted(const std::array<float, 2>& clusterPos) const {
+std::array<float, 2> Cluster::ComputeCoGUncertainty(const std::array<float, 2>& clusterPos) const {
   float sig2_u=0.f, sig2_v=0.f;
   for (const Pixel* pix : pixels) {
     float du = (pix->index[0] - clusterPos[0]);
@@ -388,10 +467,6 @@ std::array<float, 2> Cluster::ComputePosUncertainty_ChargeWeighted(const std::ar
   sig2_u /= charge;
   sig2_v /= charge;
   return {std::sqrt(sig2_u), std::sqrt(sig2_v)};
-}
-
-std::array<float, 2> Cluster::ComputePosUncertainty_ChargeWeighted() const {
-  return ComputePosUncertainty_ChargeWeighted(ComputePos());
 }
 
 float Cluster::GetSeedPixelCharge() const {
