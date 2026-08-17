@@ -33,7 +33,7 @@ SimHitWrapper::SimHitWrapper(
     {
       // now check if the MCParticle prod. vertex lies outside this sensors volume (by comparing volumeIDs)
       const edm4hep::Vector3d prodVertex_temp = m_simTrackerHit.getParticle().getVertex();
-      const dd4hep::Position prodVertex = 0.1 * ConvertVector_toPosition(prodVertex_temp); // convert edm4hep's mm -> dd4hep's cm
+      const dd4hep::Position prodVertex = 0.1 * dd4hep::Position(prodVertex_temp.x, prodVertex_temp.y, prodVertex_temp.z); // convert edm4hep's mm -> dd4hep's cm
       const dd4hep::DDSegmentation::CellID prodVertex_cellID = cellIDPositionConverter->cellID(prodVertex); // returns 0 if the position is outside of any sensitive volume
 
       // convert cellID to volumeID - see comment in VTXdigi_Modular::GetVolumeID())
@@ -86,16 +86,6 @@ edm4hep::Vector3d ConvertVector(dd4hep::rec::Vector3D vec) {
   return edm4hep::Vector3d(vec.x(), vec.y(), vec.z());
 }
 
-dd4hep::Position ConvertVector_toPosition(dd4hep::rec::Vector3D vec) {
-  return dd4hep::Position(vec.x(), vec.y(), vec.z());
-}
-dd4hep::Position ConvertVector_toPosition(edm4hep::Vector3f vec) {
-  return dd4hep::Position(vec.x, vec.y, vec.z);
-}
-dd4hep::Position ConvertVector_toPosition(edm4hep::Vector3d vec) {
-  return dd4hep::Position(vec.x, vec.y, vec.z);
-}
-
 TGeoHMatrix ComputeSensorTrafoMatrix(const dd4hep::DDSegmentation::VolumeID& volumeID, const dd4hep::VolumeManager& volumeManager, const TGeoRotation& sensorNormalRotation) {
   TGeoHMatrix M = volumeManager.lookupDetElement(volumeID).nominal().worldTransformation();
 
@@ -112,19 +102,19 @@ TGeoHMatrix ComputeSensorTrafoMatrix(const dd4hep::DDSegmentation::VolumeID& vol
   return M;
 }
 
-dd4hep::rec::Vector3D GlobalToLocal(const dd4hep::rec::Vector3D& global, const TGeoHMatrix& M) {
+dd4hep::rec::Vector3D Trafo_global_local(const dd4hep::rec::Vector3D& global, const TGeoHMatrix& M) {
   double local[3];
   M.MasterToLocal(global, local);
   return dd4hep::rec::Vector3D(local[0], local[1], local[2]);
 }
 
-dd4hep::rec::Vector3D LocalToGlobal(const dd4hep::rec::Vector3D& local, const TGeoHMatrix& M) {
+dd4hep::rec::Vector3D Trafo_local_global(const dd4hep::rec::Vector3D& local, const TGeoHMatrix& M) {
   double global[3];
   M.LocalToMaster(local, global);
   return dd4hep::rec::Vector3D(global[0], global[1], global[2]);
 }
 
-std::array<float, 2> LocalToPixIndexCoords(const dd4hep::rec::Vector3D& local, const std::array<float, 2> pixelPitch, const std::array<size_t, 2> pixelCount) {
+std::array<float, 2> Trafo_local_pixIndexCoords(const dd4hep::rec::Vector3D& local, const std::array<float, 2> pixelPitch, const std::array<size_t, 2> pixelCount) {
   const std::array<float, 2> local_2d = {static_cast<float>(local.x()), static_cast<float>(local.y())};
   std::array<float, 2> pixIndex;
   for (size_t axis = 0; axis < 2; ++axis) {
@@ -137,7 +127,7 @@ std::array<float, 2> LocalToPixIndexCoords(const dd4hep::rec::Vector3D& local, c
   return pixIndex;
 }
 
-dd4hep::rec::Vector3D PixIndexCoordsToLocal(const std::array<float, 2>& pixIndexCoords, const float w, const std::array<float, 2> pixelPitch, const std::array<size_t, 2> pixelCount) {
+dd4hep::rec::Vector3D Trafo_pixIndexCoords_local(const std::array<float, 2>& pixIndexCoords, const float w, const std::array<float, 2> pixelPitch, const std::array<size_t, 2> pixelCount) {
   std::array<float, 2> local;
   for (size_t axis = 0; axis < 2; ++axis) {
     const float halfLength = 0.5 * pixelPitch[axis] * pixelCount[axis];
@@ -188,7 +178,7 @@ float ComputeBinCenter(int i, float binX0, float binX1, int binN) {
   return ComputeBinCenter(i, binX0, binWidth);
 } // ComputeBinCenter()
 
-std::array<int, 2> ComputePixelIndices(const dd4hep::rec::Vector3D& pos, const std::array<float, 2> pixelPitch, const std::array<size_t, 2> pixelCount) {
+std::array<int, 2> Trafo_local_pixIndex(const dd4hep::rec::Vector3D& pos, const std::array<float, 2> pixelPitch, const std::array<size_t, 2> pixelCount) {
   const float length_u_half = 0.5 * pixelPitch[0] * pixelCount[0];
   int i_u = ComputeBinIndex(
     pos.x(),
@@ -204,10 +194,10 @@ std::array<int, 2> ComputePixelIndices(const dd4hep::rec::Vector3D& pos, const s
     pixelCount[1]);
 
   return {i_u, i_v};
-} // ComputePixelIndices()
+} // Trafo_local_pixIndex()
 
 
-std::array<int, 3> ComputeInPixelIndices(const dd4hep::rec::Vector3D& pos, const std::array<int, 3>& binCount, const std::array<float, 2>& pixelPitch, const std::array<float, 3>& activeVolumeDimensions) {
+std::array<int, 3> Trafo_local_inpixIndex(const dd4hep::rec::Vector3D& pos, const std::array<int, 3>& binCount, const std::array<float, 2>& pixelPitch, const std::array<float, 3>& activeVolumeDimensions) {
   std::array<int, 3> indices;
 
   const float posShifted_u = pos.x() + 0.5 * activeVolumeDimensions[0]; // shift to [0, length_u]
@@ -235,9 +225,9 @@ std::array<int, 3> ComputeInPixelIndices(const dd4hep::rec::Vector3D& pos, const
   indices[2] = ComputeBinIndex(posShifted_w, 0.0, activeVolumeDimensions[2] / binCount[2], binCount[2]); // no fmod, so out-of-bounds is caught
 
   return indices;
-} // ComputeInPixelIndices()
+} // Trafo_local_inpixIndex()
 
-dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::array<int, 2> pixelIndex, const std::array<float, 2> sensorLength,  const std::array<float, 2> pixelPitch, float depletedRegionDepthCenter) {
+dd4hep::rec::Vector3D Trafo_pixIndex_local(const std::array<int, 2> pixelIndex, const std::array<float, 2> sensorLength,  const std::array<float, 2> pixelPitch, float depletedRegionDepthCenter) {
   /* returns the position of the center of pixel i_u, i_v in the local sensor frame */
 
   float u = (static_cast<float>(pixelIndex[0]) + 0.5f) * pixelPitch[0] - 0.5f * sensorLength[0]; // in mm
@@ -247,11 +237,11 @@ dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::array<int, 2> pixe
   return dd4hep::rec::Vector3D(u, v, w);
 }
 
-dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::array<int, 2> pixelIndex, const std::array<float, 2> sensorLength, const std::array<float, 2> pixelPitch) {
-  return ComputePosFromPixIndex_local(pixelIndex, sensorLength, pixelPitch, 0.f);
+dd4hep::rec::Vector3D Trafo_pixIndex_local(const std::array<int, 2> pixelIndex, const std::array<float, 2> sensorLength, const std::array<float, 2> pixelPitch) {
+  return Trafo_pixIndex_local(pixelIndex, sensorLength, pixelPitch, 0.f);
 }
 
-dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::array<float, 2> index, const std::array<float, 2> sensorLength,  const std::array<float, 2> pixelPitch, float depletedRegionDepthCenter) {
+dd4hep::rec::Vector3D Trafo_pixIndex_local(const std::array<float, 2> index, const std::array<float, 2> sensorLength,  const std::array<float, 2> pixelPitch, float depletedRegionDepthCenter) {
   /* returns the position of the center of pixel i_u, i_v in the local sensor frame */
 
   float u = (index[0] + 0.5f) * pixelPitch[0] - 0.5f * sensorLength[0]; // in mm. Add 0.5*pixelPitch to shift from pixel edge to center, since index 0 is defined as the center of the pixel.
@@ -261,25 +251,8 @@ dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::array<float, 2> in
   return dd4hep::rec::Vector3D(u, v, w);
 }
 
-dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::array<float, 2> index, const std::array<float, 2> sensorLength,  const std::array<float, 2> pixelPitch) {
-  return ComputePosFromPixIndex_local(index, sensorLength, pixelPitch, 0.f);
-}
-
-dd4hep::rec::Vector3D ComputeInPixelPos(const dd4hep::rec::Vector3D& pos_local, const std::array<float, 2> pixelPitch, const std::array<float, 2>& sensorLength) {
-  if (pos_local.x() < -0.5 * sensorLength[0] || pos_local.x() > 0.5 * sensorLength[0])
-    throw std::runtime_error("ComputeInPixelPos: pos_local.x() out of sensor bounds");
-  if (pos_local.y() < -0.5 * sensorLength[1] || pos_local.y() > 0.5 * sensorLength[1])
-    throw std::runtime_error("ComputeInPixelPos: pos_local.y() out of sensor bounds");
-
-  float posShifted_u = pos_local.x() + 0.5 * sensorLength[0]; // shift to [0, length_u] to account for both even and odd number of pixels
-  float posInPixel_u = std::fmod(posShifted_u,  pixelPitch[0]);
-  posInPixel_u -= 0.5 * pixelPitch[0]; // centre coordinate system at pixel centre
-
-  float posShifted_v = pos_local.y() + 0.5 * sensorLength[1];
-  float posInPixel_v = std::fmod(posShifted_v, pixelPitch[1]);
-  posInPixel_v -= 0.5 * pixelPitch[1];
-
-  return dd4hep::rec::Vector3D(posInPixel_u, posInPixel_v, pos_local.z());
+dd4hep::rec::Vector3D Trafo_pixIndex_local(const std::array<float, 2> index, const std::array<float, 2> sensorLength,  const std::array<float, 2> pixelPitch) {
+  return Trafo_pixIndex_local(index, sensorLength, pixelPitch, 0.f);
 }
 
 /* -- HitMap -- */
@@ -412,20 +385,6 @@ float EtaDistribution::CorrectPos(const int axis, const float biasedPos) const {
   const float slope = m_slopes.at(axis).at(i_point);
   const float correctedPos = m_points.at(axis).at(i_point).second + slope * (biasedPos - m_points.at(axis).at(i_point).first);
   return correctedPos;
-}
-
-dd4hep::rec::Vector3D EtaDistribution::CorrectPos(const dd4hep::rec::Vector3D& biasedPos, const std::array<float, 2> pixelPitch, const std::array<size_t, 2> pixelCount) const {
-  const float w = biasedPos.z();
-  const std::array<float, 2> biasedPos_pix = LocalToPixIndexCoords(biasedPos, pixelPitch, pixelCount);
-  std::array<float, 2> correctedPos_pix;
-
-  for (int axis=0; axis<2; ++axis) {
-    const float index = std::floor(biasedPos_pix[axis]);
-    const float offset = biasedPos_pix[axis] - index;
-    correctedPos_pix[axis] = index + CorrectPos(axis, offset);
-  }
-
-  return PixIndexCoordsToLocal(correctedPos_pix, w, pixelPitch, pixelCount);
 }
 
 const std::pair<float, float>& EtaDistribution::GetFunctionBinValue(const int axis, const unsigned int bin) const {

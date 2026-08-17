@@ -142,12 +142,6 @@ public:
    * @returns Corrected position along the axis */
   float CorrectPos(const int axis, const float biasedPos) const;
 
-  /** @brief Correct a biased position along an axis using the eta distribution
-   * @param biasedPos biased position in local sensor coordinates
-   * @returns Corrected position in local sensor coordinates */
-  dd4hep::rec::Vector3D CorrectPos(const dd4hep::rec::Vector3D& biasedPos, const std::array<float, 2> pixelPitch, const std::array<size_t, 2> pixelCount) const;
-  // currently unused, kept it for completeness (for now)
-
   /** @brief Get the (biased position, corrected position) pair stored at a given bin, in terms of in-pixel coordinate t [-0.5, 0.5]
    * @note biased position is confined to [-0.5, 0.5]; corrected position is not pinned to that range and may extend beyond it (e.g. under a strong Lorentz shift) */
   const std::pair<float, float>& GetFunctionBinValue(const int axis, const unsigned int bin) const;
@@ -219,28 +213,40 @@ dd4hep::rec::Vector3D ConvertVector(edm4hep::Vector3f vec);
 /** @brief Convert a dd4hep::rec::Vector3D to edm4hep::Vector3d */
 edm4hep::Vector3d ConvertVector(dd4hep::rec::Vector3D vec);
 
-/** @brief Convert a dd4hep::rec::Vector3D to dd4hep::Position */
-dd4hep::Position ConvertVector_toPosition(dd4hep::rec::Vector3D vec);
-/** @brief Convert a edm4hep::Vector3f to dd4hep::Position */
-dd4hep::Position ConvertVector_toPosition(edm4hep::Vector3f vec);
-/** @brief Convert a edm4hep::Vector3d to dd4hep::Position */
-dd4hep::Position ConvertVector_toPosition(edm4hep::Vector3d vec);
-
 
 /** @brief Compute the transformation matrix from global detector to local sensor frame for a given sensor volume (defined by its volumeID) */
 TGeoHMatrix ComputeSensorTrafoMatrix(const dd4hep::DDSegmentation::VolumeID& volumeID, const dd4hep::VolumeManager& volumeManager, const TGeoRotation& sensorNormalRotation);
 
-/** @brief Transform a position from global detector coordinates to local sensor coordinates, using the sensor transformation matrix */
-dd4hep::rec::Vector3D GlobalToLocal(const dd4hep::rec::Vector3D& global, const TGeoHMatrix& M);
-/** @brief Transform a position from local sensor coordinates to global detector coordinates, using the sensor transformation matrix */
-dd4hep::rec::Vector3D LocalToGlobal(const dd4hep::rec::Vector3D& local, const TGeoHMatrix& M);
+/** @brief Transform a position from global detector coordinates to sensor-local coordinates, using the sensor transformation matrix */
+dd4hep::rec::Vector3D Trafo_global_local(const dd4hep::rec::Vector3D& global, const TGeoHMatrix& M);
+/** @brief Transform a position from sensor-local coordinates to global detector coordinates, using the sensor transformation matrix */
+dd4hep::rec::Vector3D Trafo_local_global(const dd4hep::rec::Vector3D& local, const TGeoHMatrix& M);
 
-/** @brief Transform a position from local sensor coordinates to pixel index coordinates
+/** @brief Transform a position from sensor-local sensor coordinates to pixel index coordinates
  * @note the origin lies at the centre of the (0,0) pixel, pixel centres are at multiples of one */
-std::array<float, 2> LocalToPixIndexCoords(const dd4hep::rec::Vector3D& local, const std::array<float, 2> pixelPitch, const std::array<size_t, 2> pixelCount);
+std::array<float, 2> Trafo_local_pixIndexCoords(const dd4hep::rec::Vector3D& local, const std::array<float, 2> pixelPitch, const std::array<size_t, 2> pixelCount);
 
-/** @brief Transform a position from pixel index coordinates to local sensor coordinates */
-dd4hep::rec::Vector3D PixIndexCoordsToLocal(const std::array<float, 2>& pixIndexCoords, const float w, const std::array<float, 2> pixelPitch, const std::array<size_t, 2> pixelCount);
+/** @brief Transform a position from pixel index coordinates to sensor-local coordinates */
+dd4hep::rec::Vector3D Trafo_pixIndexCoords_local(const std::array<float, 2>& pixIndexCoords, const float w, const std::array<float, 2> pixelPitch, const std::array<size_t, 2> pixelCount);
+
+/** @brief Compute the indices of the pixel (i_u, i_v) that a given sensor-local position lies in */
+std::array<int, 2> Trafo_local_pixIndex(const dd4hep::rec::Vector3D& pos, const std::array<float, 2> pixelPitch, const std::array<size_t, 2> pixelCount);
+
+/** @brief Compute the inices of the in-pixel bin (j_u, j_v, j_w) that a given sensor-local position lies in */
+std::array<int, 3> Trafo_local_inpixIndex(const dd4hep::rec::Vector3D& pos, const std::array<int, 3>& binCount, const std::array<float, 2>& pixelPitch, const std::array<float, 3>& activeVolumeDimensions);
+
+/** @brief Transform a position from pixel index coordinates to sensor-local coordinates
+ * @note The w coordinate is set to depletedRegionDepthCenter.*/
+dd4hep::rec::Vector3D Trafo_pixIndex_local(const std::array<int, 2> pixelIndex, const std::array<float, 2> sensorLength,  const std::array<float, 2> pixelPitch, float depletedRegionDepthCenter);
+/** @brief Transform a position from pixel index coordinates to sensor-local coordinates, setting w=0 */
+dd4hep::rec::Vector3D Trafo_pixIndex_local(const std::array<int, 2> pixelIndex, const std::array<float, 2> sensorLength, const std::array<float, 2> pixelPitch);
+
+/** @brief Transform a position from pixel index coordinates to sensor-local coordinates
+ * @note The w coordinate is set to depletedRegionDepthCenter */
+dd4hep::rec::Vector3D Trafo_pixIndex_local(const std::array<float, 2> index, const std::array<float, 2> sensorLength,  const std::array<float, 2> pixelPitch, float depletedRegionDepthCenter);
+/** @brief Transform a position from pixel index coordinates to sensor-local coordinates, setting w=0 */
+dd4hep::rec::Vector3D Trafo_pixIndex_local(const std::array<float, 2> index, const std::array<float, 2> sensorLength, const std::array<float, 2> pixelPitch);
+
 
 int GetLayer(const dd4hep::DDSegmentation::VolumeID& volumeID, const std::unique_ptr<dd4hep::DDSegmentation::BitFieldCoder>& cellIdDecoder);
 
@@ -259,32 +265,4 @@ float ComputeBinCenter(int i, float binX0, float binWidth);
  * @return Float, the center position of the bin
  * @note Bins are 0-indexed (vs ROOT's 1-indexing) */
 float ComputeBinCenter(int i, float binX0, float binX1, int binN);
-
-/** @brief Compute the pixel indices (i_u, i_v) for a given (local) position inside the sensor */
-std::array<int, 2> ComputePixelIndices(const dd4hep::rec::Vector3D& pos, const std::array<float, 2> pixelPitch, const std::array<size_t, 2> pixelCount);
-
-/** @brief Compute the in-pixel indices (j_u, j_v, j_w) for a given (local) position inside the pixel and layer index
- *  @note Assumption: each layer has only 1 type if sensor */
-std::array<int, 3> ComputeInPixelIndices(const dd4hep::rec::Vector3D& pos, const std::array<int, 3>& binCount, const std::array<float, 2>& pixelPitch, const std::array<float, 3>& activeVolumeDimensions);
-
-/** @brief Compute the center position of a given pixel (i_u,i_v) in sensor-local coordinates (u,v,w)
- * @note The w coordinate is set to depletedRegionDepthCenter. 0 for center, +25 for sensor surface, +20 for TPSCo 65nm maps. */
-dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::array<int, 2> pixelIndex, const std::array<float, 2> sensorLength,  const std::array<float, 2> pixelPitch, float depletedRegionDepthCenter);
-/** @brief Compute the center position of a given pixel (i_u,i_v) in sensor-local coordinates (u,v,0) */
-dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::array<int, 2> pixelIndex, const std::array<float, 2> sensorLength, const std::array<float, 2> pixelPitch);
-
-/** @brief Compute the position of a given (pixel-)index (i_u,i_v) in sensor-local coordinates (u,v,0) .
- * @note index 0 indicates the center of the pixel, index -0.5 the lower edge and +0.5 the upper edge.
- * @note Does not check if the position is within the sensor bounds!
- * @note The w coordinate is set to depletedRegionDepthCenter. 0 for center, +25 for sensor surface, +20 for TPSCo 65nm maps. */
-dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::array<float, 2> index, const std::array<float, 2> sensorLength,  const std::array<float, 2> pixelPitch, float depletedRegionDepthCenter);
-/** @brief Compute the position of a given (pixel-)index (i_u,i_v) in sensor-local coordinates (u,v,0) .
- * @note index 0 indicates the center of the pixel, index -0.5 the lower edge and +0.5 the upper edge.
- * @note Does not check if the position is within the sensor bounds! */
-dd4hep::rec::Vector3D ComputePosFromPixIndex_local(const std::array<float, 2> index, const std::array<float, 2> sensorLength, const std::array<float, 2> pixelPitch);
-
-/** @brief Compute in-pixel position for a given local position (inside the sensor)
- * @note the coordinate system is centred at the pixel centre */
-dd4hep::rec::Vector3D ComputeInPixelPos(const dd4hep::rec::Vector3D& pos_local, const std::array<float, 2> pixelPitch, const std::array<float, 2>& sensorLength);
-
 } // namespace VTXdigi_tools

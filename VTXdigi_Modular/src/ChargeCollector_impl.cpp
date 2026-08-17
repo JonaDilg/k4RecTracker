@@ -457,10 +457,11 @@ std::array<std::vector<std::pair<float, float>>, 2> LookupTable::ComputeEtaDistr
       return a.second < b.second;
     });
 
+    // make cog's monotonically increasing, too
     for (auto it = distribution.begin()+1; it < distribution.end(); ) {
       if ((it-1)->first >= (it)->first) {
-        // two sliceCenters collect to the same (or non-monotonic) CoG: keep the one with sliceCenter further away from the pixel boundary
-        if (std::abs((it-1)->second - 0.5) > std::abs(it->second - 0.5)) {
+        // two sliceCenters collect to the same (or non-monotonic) CoG: keep the one with sliceCenter closer to the pixel boundary
+        if (std::abs((it-1)->second - 0.5) < std::abs(it->second - 0.5)) {
           it = distribution.erase(it-1);
           if (it == distribution.begin())
             ++it;
@@ -662,7 +663,7 @@ ChargeCollector_SinglePixel::ChargeCollector_SinglePixel(const VTXdigi_Modular& 
 void ChargeCollector_SinglePixel::FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix) const {
   (void) trafoMatrix; // Not used in this implementation of ChargeCollector, but we need to keep it as argument to conform to the interface. Silences the unused parameter warning.
 
-  const std::array<int, 2> i_uv = ComputePixelIndices(simHit.truthPos(), m_digitizer.PixelPitch(), m_digitizer.PixelCount());
+  const std::array<int, 2> i_uv = Trafo_local_pixIndex(simHit.truthPos(), m_digitizer.PixelPitch(), m_digitizer.PixelCount());
 
   if (!(i_uv[0] == -1 || i_uv[1] == -1 || i_uv[0] >= static_cast<int>(m_digitizer.PixelCount()[0]) || i_uv[1] >= static_cast<int>(m_digitizer.PixelCount()[1])))
     hitMap.FillCharge(i_uv, simHit.charge(), simHit);
@@ -679,7 +680,7 @@ void ChargeCollector_Debug::FillHit(const SimHitWrapper& simHit, HitMap& hitMap,
 
   const dd4hep::rec::Vector3D pos_local = simHit.truthPos();
   const float charge = simHit.charge();
-  const std::array<int, 2> i_uv = ComputePixelIndices(pos_local, m_digitizer.PixelPitch(), m_digitizer.PixelCount());
+  const std::array<int, 2> i_uv = Trafo_local_pixIndex(pos_local, m_digitizer.PixelPitch(), m_digitizer.PixelCount());
 
   m_digitizer.verbose() << "     - SimHit at local position (" << pos_local.x() << ", " << pos_local.y() << ", " << pos_local.z() << ")" << endmsg;
   m_digitizer.verbose() << "       - and pixel indices      (" << i_uv[0] << ", " << i_uv[1] << ")" << endmsg;

@@ -108,7 +108,7 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
 
     for (const VTXdigi_tools::SimHitWrapper& simHit : simHits) {
       const dd4hep::rec::Vector3D pos_global = VTXdigi_tools::ConvertVector(simHit.hitPtr()->getPosition());
-      simHit.SetTruthPos(VTXdigi_tools::GlobalToLocal(pos_global, trafoMatrix)); // do this only now to not compute the trafo matrix twice. TruthPos might be shifted by the charge collection algorithm later.
+      simHit.SetTruthPos(VTXdigi_tools::Trafo_global_local(pos_global, trafoMatrix)); // do this only now to not compute the trafo matrix twice. TruthPos might be shifted by the charge collection algorithm later.
       debug() << "     - Processing simHit, charge dep. " << simHit.charge() << " e at (" << simHit.truthPos().x() << ", " << simHit.truthPos().y() << ", " << simHit.truthPos().z() << ") local, (" << pos_global.x() << ", " << pos_global.y() << ", " << pos_global.z() << ") global" << endmsg;
 
       m_chargeCollector->FillHit(simHit, hitMap, trafoMatrix); // uses the selected charge collection method
@@ -1217,16 +1217,16 @@ void VTXdigi_Modular::InitHistograms() {
     new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float> {this,
       "Global/etaDistribution_measured_u_2D",
       "Eta distribution in u direction as \"measured\" from the digiHits (only valid for single-sensor detector model in vacuum);In-pixel cluster centre of gravity in u for 2-pix clusters (um);in-pixel truth position in u (um)",
-      axis_inpix_u,
-      axis_inpix_u
+      { 50, 0.f, m_pixelPitch.at(0) * 1000.f },
+      { 50, 0.f, m_pixelPitch.at(0) * 1000.f }
     }
   );
   m_hist2dGlobal.at(hist2dGlobal_etaDistribution_measured_v).reset(
     new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float> {this,
       "Global/etaDistribution_measured_v_2D",
       "Eta distribution in v direction as \"measured\" from the digiHits (only valid for single-sensor detector model in vacuum);In-pixel cluster centre of gravity in v for 2-pix clusters (um);in-pixel truth position in v (um)",
-      axis_inpix_v,
-      axis_inpix_v
+      { 50, 0.f, m_pixelPitch.at(1) * 1000.f },
+      { 50, 0.f, m_pixelPitch.at(1) * 1000.f }
     }
   );
 }
@@ -1281,10 +1281,10 @@ std::vector<VTXdigi_tools::Cluster> VTXdigi_Modular::Clusterize(const VTXdigi_to
 void VTXdigi_Modular::CreateDigiHits(edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitLinks, const dd4hep::DDSegmentation::VolumeID& volumeID, const TGeoHMatrix& trafoMatrix, const std::vector<VTXdigi_tools::Cluster>& clusters) const {
 
   // Called for each cluster on a sensor, so volumeID and direction vectors are same among these clusters
-  const dd4hep::rec::Vector3D direction_u_3d = VTXdigi_tools::LocalToGlobal(dd4hep::rec::Vector3D(1, 0, 0), trafoMatrix);
+  const dd4hep::rec::Vector3D direction_u_3d = VTXdigi_tools::Trafo_local_global(dd4hep::rec::Vector3D(1, 0, 0), trafoMatrix);
   const edm4hep::Vector2f direction_u = edm4hep::Vector2f(direction_u_3d.theta(), direction_u_3d.phi()); // edm4hep expects direction in to given as (theta, phi)
 
-  const dd4hep::rec::Vector3D direction_v_3d = VTXdigi_tools::LocalToGlobal(dd4hep::rec::Vector3D(0, 1, 0), trafoMatrix);
+  const dd4hep::rec::Vector3D direction_v_3d = VTXdigi_tools::Trafo_local_global(dd4hep::rec::Vector3D(0, 1, 0), trafoMatrix);
   const edm4hep::Vector2f direction_v = edm4hep::Vector2f(direction_v_3d.theta(), direction_v_3d.phi()); // edm4hep expects direction in to given as (theta, phi)
 
   for (auto& cluster : clusters) {
@@ -1312,8 +1312,8 @@ void VTXdigi_Modular::CreateDigiHits(edm4hep::TrackerHitPlaneCollection& digiHit
       clusterPos_index = cluster.ComputeCoG();
     }
 
-    const dd4hep::rec::Vector3D clusterPos_local = VTXdigi_tools::ComputePosFromPixIndex_local(clusterPos_index, m_sensorLength, m_pixelPitch, m_chargeCollector->GetChargeCollectionDepthCenter());
-    const dd4hep::rec::Vector3D clusterPos_global = VTXdigi_tools::LocalToGlobal(clusterPos_local, trafoMatrix);
+    const dd4hep::rec::Vector3D clusterPos_local = VTXdigi_tools::Trafo_pixIndex_local(clusterPos_index, m_sensorLength, m_pixelPitch, m_chargeCollector->GetChargeCollectionDepthCenter());
+    const dd4hep::rec::Vector3D clusterPos_global = VTXdigi_tools::Trafo_local_global(clusterPos_local, trafoMatrix);
     debug() << "     - Found cluster with " << cluster.pixels.size() << " pixels, charge " << cluster.charge << ", center at (" << clusterPos_index[0] << ", " << clusterPos_index[1] << "). Has " << cluster.simHits.size() << " contributing simHits." << endmsg;
     digiHit.setPosition(VTXdigi_tools::ConvertVector(clusterPos_global));
 
@@ -1387,9 +1387,9 @@ void VTXdigi_Modular::FillHistograms_perSimHit(const VTXdigi_tools::SimHitWrappe
   const TGeoHMatrix trafoMatrix = VTXdigi_tools::ComputeSensorTrafoMatrix(simHit.volumeID(), m_volumeManager, m_sensorNormalRotation);
 
   const dd4hep::rec::Vector3D simHitPos_global = VTXdigi_tools::ConvertVector(simHit.hitPtr()->getPosition());
-  const dd4hep::rec::Vector3D simHitPos_local = VTXdigi_tools::GlobalToLocal(simHitPos_global, trafoMatrix);
+  const dd4hep::rec::Vector3D simHitPos_local = VTXdigi_tools::Trafo_global_local(simHitPos_global, trafoMatrix);
   const dd4hep::rec::Vector3D simHitProdVertex_global = VTXdigi_tools::ConvertVector(simHit.hitPtr()->getParticle().getVertex());
-  const std::array<int, 2> i_uv = VTXdigi_tools::ComputePixelIndices(simHitPos_local, m_pixelPitch, m_pixelCount);
+  const std::array<int, 2> i_uv = VTXdigi_tools::Trafo_local_pixIndex(simHitPos_local, m_pixelPitch, m_pixelCount);
 
   const dd4hep::rec::Vector3D simHitMomentum = VTXdigi_tools::ConvertVector(simHit.hitPtr()->getMomentum()); // in GeV
   const dd4hep::rec::Vector3D simHitMomentumInitial = VTXdigi_tools::ConvertVector(simHit.hitPtr()->getParticle().getMomentum()); // in GeV
@@ -1454,7 +1454,7 @@ void VTXdigi_Modular::FillHistograms_perDigiHit(const VTXdigi_tools::Cluster& cl
   /* executed once for each digiHit */
   const int layer = VTXdigi_tools::GetLayer(digiHit.getCellID(), m_cellIdDecoder);
   const dd4hep::rec::Vector3D pos_global = VTXdigi_tools::ConvertVector(digiHit.getPosition());
-  const dd4hep::rec::Vector3D pos_local = VTXdigi_tools::GlobalToLocal(pos_global, trafoMatrix);
+  const dd4hep::rec::Vector3D pos_local = VTXdigi_tools::Trafo_global_local(pos_global, trafoMatrix);
 
   ++(*m_hist1d.at(layer).at(hist1d_digiHit_collectedCharge))[ digiHit.getEDep() * VTXdigi_tools::kChargePerkeV ];
   ++(*m_hist1d.at(layer).at(hist1d_digiHit_collectedCharge_seedPixel))[ cluster.GetSeedPixelCharge() ];
@@ -1485,7 +1485,7 @@ void VTXdigi_Modular::FillHistograms_perDigiHit(const VTXdigi_tools::Cluster& cl
     const edm4hep::MCParticle mcParticle = simHit->hitPtr()->getParticle();
 
     const dd4hep::rec::Vector3D simHitPos_local = simHit->truthPos();
-    const dd4hep::rec::Vector3D simHitPos_global = VTXdigi_tools::LocalToGlobal(simHitPos_local, trafoMatrix);
+    const dd4hep::rec::Vector3D simHitPos_global = VTXdigi_tools::Trafo_local_global(simHitPos_local, trafoMatrix);
     const dd4hep::rec::Vector3D residual_local = pos_local - simHitPos_local; // residual = observed - predicted
 
     const float hit_z = simHitPos_global.z();
@@ -1502,17 +1502,23 @@ void VTXdigi_Modular::FillHistograms_perDigiHit(const VTXdigi_tools::Cluster& cl
       ++(*m_hist1d.at(layer).at(hist1d_residual_u_toPrimaries))[ residual_local.x()*1000.f ];
       ++(*m_hist1d.at(layer).at(hist1d_residual_v_toPrimaries))[ residual_local.y()*1000.f ];
 
-      const dd4hep::rec::Vector3D simHitPos_inPix = VTXdigi_tools::ComputeInPixelPos(simHitPos_local, m_pixelPitch, m_sensorLength);
-      const dd4hep::rec::Vector3D pos_inPix = VTXdigi_tools::ComputeInPixelPos(pos_local, m_pixelPitch, m_sensorLength);
+      std::array<float, 2> pos_pixIndexCoords = VTXdigi_tools::Trafo_local_pixIndexCoords(pos_local, m_pixelPitch, m_pixelCount);
+      std::array<float, 2> simHitPos_pixIndexCoords = VTXdigi_tools::Trafo_local_pixIndexCoords(simHitPos_local, m_pixelPitch, m_pixelCount);
 
       if (cluster.GetSize(0) == 2) {
-        (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_measured_u))[ simHitPos_inPix.x() * 1000.f ] += pos_inPix.x() * 1000.f; // convert to um
-        ++(*m_hist2dGlobal.at(hist2dGlobal_etaDistribution_measured_u))[ {simHitPos_inPix.x() * 1000.f, pos_inPix.x() * 1000.f} ]; // convert to um
+        const float pos_distFromLeftPix = std::fmod(pos_pixIndexCoords[0]+1.f, 1.f) * m_pixelPitch[0] * 1000.f; // convert to um
+        const float simHitPospos_distFromLeftPix = std::fmod(simHitPos_pixIndexCoords[0]+1.f, 1.f) * m_pixelPitch[0] * 1000.f;
+
+        (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_measured_u))[ pos_distFromLeftPix ] += simHitPospos_distFromLeftPix;
+        ++(*m_hist2dGlobal.at(hist2dGlobal_etaDistribution_measured_u))[ {pos_distFromLeftPix, simHitPospos_distFromLeftPix} ];
       }
 
       if (cluster.GetSize(1) == 2) {
-        (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_measured_v))[ simHitPos_inPix.y() * 1000.f ] += pos_inPix.y() * 1000.f; // convert to um
-        ++(*m_hist2dGlobal.at(hist2dGlobal_etaDistribution_measured_v))[ {simHitPos_inPix.y() * 1000.f, pos_inPix.y() * 1000.f} ]; // convert to um
+        const float pos_distFromLeftPix = std::fmod(pos_pixIndexCoords[1], 1.f) * m_pixelPitch[1] * 1000.f; // transform to [0, pitch], then convert to um
+        const float simHitPospos_distFromLeftPix = std::fmod(simHitPos_pixIndexCoords[1], 1.f) * m_pixelPitch[1] * 1000.f;
+
+        (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_measured_v))[ pos_distFromLeftPix ] += simHitPospos_distFromLeftPix; // convert to um
+        ++(*m_hist2dGlobal.at(hist2dGlobal_etaDistribution_measured_v))[ {pos_distFromLeftPix, simHitPospos_distFromLeftPix} ]; // convert to um
       }
 
     }
@@ -1568,7 +1574,7 @@ void VTXdigi_Modular::FillHistograms_perSensor(const std::vector<VTXdigi_tools::
 
   for (const auto& digiHit : digiHits) {
     const dd4hep::rec::Vector3D pos_global = VTXdigi_tools::ConvertVector(digiHit.getPosition());
-    const dd4hep::rec::Vector3D pos_local = VTXdigi_tools::GlobalToLocal(pos_global, trafoMatrix);
+    const dd4hep::rec::Vector3D pos_local = VTXdigi_tools::Trafo_global_local(pos_global, trafoMatrix);
 
     const dd4hep::rec::Vector3D residual_local = pos_local - simHitMaxE_pos_local; // residual = observed - predicted
 
@@ -1582,7 +1588,7 @@ void VTXdigi_Modular::FillHistograms_fromChargeCollector_perSimHit(const int lay
 
   const float pathLength = pathTravel.r(); // in mm
   const float factor_um_per_mm = 1000.f;
-  const dd4hep::rec::Vector3D truthPos_global = VTXdigi_tools::LocalToGlobal(truthPos_local, trafoMatrix);
+  const dd4hep::rec::Vector3D truthPos_global = VTXdigi_tools::Trafo_local_global(truthPos_local, trafoMatrix);
 
   ++(*m_hist1dglobal.at(hist1dglobal_pathTravel_r))[ pathLength*factor_um_per_mm ]; // convert from mm to um
   ++(*m_hist1dglobal.at(hist1dglobal_pathTravel_r_Geant4))[ pathLength_Geant4*factor_um_per_mm ];

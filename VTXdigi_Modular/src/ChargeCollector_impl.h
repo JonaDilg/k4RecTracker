@@ -96,7 +96,7 @@ class ChargeCollector_LUT : public IChargeCollector {
   const bool m_shiftTruthPos; // if true, the truth position in the simHitWrapper is shifted to the depth in the sensor where most charge is collected, to get useful residual plots. Mirrors VTXdigi_Modular::m_LUT_shiftTruthPosition Gaudi property.
 
   /* fine grid over the whole sensor (pixel grid x in-pixel bins), used by the voxel traversal in FillHit().
-   * Anchored to the pixel grid (pitch*pixelCount) like ComputePixelIndices(), which matches the active volume
+   * Anchored to the pixel grid (pitch*pixelCount) like Trafo_local_pixIndex(), which matches the active volume
    * length within the tolerance checked in VTXdigi_Modular::InitLayersAndSensors(). */
   std::array<float, 3> m_cellSize; // size of one voxel per (u,v,w) axis, in mm
   std::array<float, 3> m_gridOrigin; // lower corner of the fine grid, in local coordinates, in mm
