@@ -381,20 +381,21 @@ int LookupTable::FindIndex (const Index_inPix& j, const int col, const int row) 
 std::array<std::vector<std::pair<float, float>>, 2> LookupTable::ComputeEtaDistribution() const {
 
   // for each bin along the u/v axis, compute the centre of gravity of a cluster that is formed by charges deposited evenly across this slice. This is used to compute the eta distribution for charge sharing.
+  // for each slice we get a pair (reco: collection centre of gravity (CoG), truth: bin centre)
   std::array<std::vector<std::pair<float, float>>, 2> etaDistributions;
 
   // loop over bins in the u/v axis
   for (int i_axis = 0; i_axis < 2; ++i_axis) {
-    etaDistributions.at(i_axis).emplace_back(-0.5f, -0.5f); // fix first entry
+
+    std::vector<std::pair<float, float>> distribution;
 
     const int n_bins = m_binCount[i_axis];
+
     const int i_otherAxis = (i_axis == 0) ? 1 : 0;
     const int n_bins_otherAxis = m_binCount[i_otherAxis];
 
     // loop over slices through the LUT along the axis (ie. loop over bins)
     for (int i_bin_axis = 0; i_bin_axis < n_bins; ++i_bin_axis) {
-
-
       // per slice: compute the centre of gravity along the axis of a cluster that is formed by charges deposited evenly across this slice
 
       std::vector<float> projectedMatrix(m_matrixSize, 0.f);
@@ -424,19 +425,57 @@ std::array<std::vector<std::pair<float, float>>, 2> LookupTable::ComputeEtaDistr
         }
       }
 
-      float pos=0.f, pos_weights=0.f;
+      float cog=0.f, pos_weights=0.f;
       for (int i=0; i<m_matrixSize; ++i) {
-        pos += static_cast<float>(i-2) * projectedMatrix[i];
+        cog += static_cast<float>(i-2) * projectedMatrix[i];
         pos_weights += projectedMatrix[i];
       }
-      pos /= pos_weights; // normalise to get center of gravity
+      cog /= pos_weights; // normalise to get center of gravity of where charge deposited in this slice is collected (note this can be outside this pixel)
 
-      float binCenter = (static_cast<float>(i_bin_axis) + 0.5f) / static_cast<float>(n_bins) - 0.5f; // bin center in [-0.5,0.5] range
-      etaDistributions.at(i_axis).emplace_back(binCenter, pos);
+      float sliceCenter = (static_cast<float>(i_bin_axis) + 0.5f) / static_cast<float>(n_bins) - 0.5f; // this is the "truth position". In [-0.5,0.5] range, relative to this pixel's own centre (which sits at 0)
+
+      // Eta-distrib. is defined from one pixel centre to the next pixels centre -> transform from [-0.5, 0.5] to [0, 1]
+      const bool inLeftHalf = (sliceCenter < 0.f);
+      sliceCenter += static_cast<float>(inLeftHalf);
+      cog += static_cast<float>(inLeftHalf);
+
+      // if the cog is outside the pixel, wrap it around
+      if (cog < 0.f) {
+        cog += 1.f;
+        sliceCenter += 1.f;
+      }
+      else if (cog > 1.f) {
+        cog -= 1.f;
+        sliceCenter -= 1.f;
+      }
+
+      distribution.emplace_back(cog, sliceCenter);
     } // loop over bins along axis
-    etaDistributions.at(i_axis).emplace_back(0.5f, 0.5f); // fix last entry
-  } // u/v axis
 
+    // now, order the entries in the eta distrib by biased position (ie cog) to get a monotonically increasing function in [0,1]
+    std::sort(distribution.begin(), distribution.end(), [](const std::pair<float, float>& a, const std::pair<float, float>& b) {
+      return a.second < b.second;
+    });
+
+    for (auto it = distribution.begin()+1; it < distribution.end(); ) {
+      if ((it-1)->first >= (it)->first) {
+        // two sliceCenters collect to the same (or non-monotonic) CoG: keep the one with sliceCenter further away from the pixel boundary
+        if (std::abs((it-1)->second - 0.5) > std::abs(it->second - 0.5)) {
+          it = distribution.erase(it-1);
+          if (it == distribution.begin())
+            ++it;
+        }
+        else
+          it = distribution.erase(it);
+      }
+      else {
+        ++it;
+      }
+    }
+
+
+    etaDistributions[i_axis] = distribution;
+  } // u/v axis
   return etaDistributions;
 }
 
@@ -664,4 +703,4 @@ void ChargeCollector_Debug::FillHit(const SimHitWrapper& simHit, HitMap& hitMap,
 
 // /* -- Drift approach -- */
 
-} // namespace VTXdigi_tools
+} // n amespace VTXdigi_tools

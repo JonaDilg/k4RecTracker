@@ -20,10 +20,10 @@ public:
   virtual void FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix) const = 0;
 
   /** @brief Compute the eta distribution values from the charge collector
-   * @return An optional array containing the eta distribution values in u and v, or std::nullopt if not applicable in the selected implementation
-   * @note For an even binning across a single pixel, the vector contains the charge collection centre of gravity for each bin
-   * @note Implemeted such to stop LUT implementation details from leaking into the digitizer */
+   * @returns Eta distributions along u and v axes, if available. Each axis contains a vector of pairs [biased position, corrected position]
+   * @note The biased positions are sorted from one pixel centre to the next pixel centre. The first pixel centre lies at 0, the next at +0.5 */
   virtual std::optional< std::array<std::vector<std::pair<float, float>>, 2> > ComputeEtaDistribution() const { return std::nullopt; }
+  // Implemeted such to stop LUT implementation details from leaking into the digitizer
 
   float GetChargeCollectionDepthCenter() const { return m_chargeCollectionDepthCenter; }
 

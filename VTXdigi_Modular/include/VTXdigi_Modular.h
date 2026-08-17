@@ -331,7 +331,9 @@ private:
 
   enum {
     histProfile1dGlobal_etaDistribution_derived_u,
+    histProfile1dGlobal_etaDistribution_derived_u_interpolated,
     histProfile1dGlobal_etaDistribution_derived_v,
+    histProfile1dGlobal_etaDistribution_derived_v_interpolated,
     histProfile1dGlobal_etaDistribution_measured_u,
     histProfile1dGlobal_etaDistribution_measured_v,
     histProfile1dGlobalArrayLen
@@ -348,8 +350,8 @@ private:
   > m_histProfile1dGlobal;
 
   enum {
-    hist2dGlobal_etaDistribution_u,
-    hist2dGlobal_etaDistribution_v,
+    hist2dGlobal_etaDistribution_measured_u,
+    hist2dGlobal_etaDistribution_measured_v,
     hist2dGlobalArrayLen
   };
   std::array<

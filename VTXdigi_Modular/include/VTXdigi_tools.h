@@ -126,27 +126,31 @@ std::array<std::array<int, 2>, 8> GetNeighbors(const std::array<int, 2>& i_uv);
 
 /** @brief A class to represent the eta correction distributions
  * @note The distribution may be derived for a given LUT
- * @note Per LUT bin along the u (v) axis, the function encodes the center of gravity position of a cluster that would be caused by charges in this bin
- * This implementation follows the idea of https://arxiv.org/pdf/2107.06600*/
+ * @note Per LUT bin along the u (v) axis, the distribution encodes the (biased position, corrected position) pair that a charge deposited evenly across this bin would cause */
 class EtaDistribution {
-  const std::array<std::vector<std::pair<float, float>>, 2> m_distributionPoints;
-  std::array<std::vector<float>, 2> m_slopes; // pre-computed slopes for the linear interpolation
-  // slopes[0] is slope between points[0] and points[1]
+  std::array<std::vector<std::pair<float, float>>, 2> m_points; // (biased pos, corrected pos)
+  std::array<std::vector<float>, 2> m_slopes; // dTruthPos/dCoG between consecutive m_points
 
 public:
-  EtaDistribution(std::array<std::vector<std::pair<float, float>>, 2> DistributionPoints);
+  EtaDistribution(std::array<std::vector<std::pair<float, float>>, 2> distributionPoints);
 
-  inline unsigned int GetNBins(const int axis) const { return m_distributionPoints.at(axis).size(); };
+  inline unsigned int GetNBins(const int axis) const { return m_points.at(axis).size(); };
   inline std::array<unsigned int, 2> GetNBins() const { return {GetNBins(0), GetNBins(1)}; };
 
-  /** @brief Get the collection center of gravity along a axis for an in-pixel bin
-   * @returns CoG in terms of in-pixel coordinate t [-0.5, 0.5] */
-  float GetCollectionCoG_Bin(const int axis, const unsigned int bin) const;
+  /** @brief Correct a biased position along an axis using the eta distribution
+   * @param biasedPos biased position offset to last pixel centre in terms of in-pixel coordinate [0, 1] (0 = left pixel centre, 1 = right pixel centre)
+   * @returns Corrected position along the axis */
+  float CorrectPos(const int axis, const float biasedPos) const;
 
-  /** @brief Correct a given in-pixel position (cluster CoG) along an axis using the eta distribution
-   * @param pos In-pixel position (uncorrected cluster CoG) in terms of in-pix coordinate t [-0.5, 0.5]
-   * @returns Corrected CoG in terms of in-pix coordinate t [-0.5, 0.5] */
-  float Correct(const int axis, const float pos) const;
+  /** @brief Correct a biased position along an axis using the eta distribution
+   * @param biasedPos biased position in local sensor coordinates
+   * @returns Corrected position in local sensor coordinates */
+  dd4hep::rec::Vector3D CorrectPos(const dd4hep::rec::Vector3D& biasedPos, const std::array<float, 2> pixelPitch, const std::array<size_t, 2> pixelCount) const;
+  // currently unused, kept it for completeness (for now)
+
+  /** @brief Get the (biased position, corrected position) pair stored at a given bin, in terms of in-pixel coordinate t [-0.5, 0.5]
+   * @note biased position is confined to [-0.5, 0.5]; corrected position is not pinned to that range and may extend beyond it (e.g. under a strong Lorentz shift) */
+  const std::pair<float, float>& GetFunctionBinValue(const int axis, const unsigned int bin) const;
 };
 
 /* -- HitMap -- */
@@ -230,6 +234,13 @@ TGeoHMatrix ComputeSensorTrafoMatrix(const dd4hep::DDSegmentation::VolumeID& vol
 dd4hep::rec::Vector3D GlobalToLocal(const dd4hep::rec::Vector3D& global, const TGeoHMatrix& M);
 /** @brief Transform a position from local sensor coordinates to global detector coordinates, using the sensor transformation matrix */
 dd4hep::rec::Vector3D LocalToGlobal(const dd4hep::rec::Vector3D& local, const TGeoHMatrix& M);
+
+/** @brief Transform a position from local sensor coordinates to pixel index coordinates
+ * @note the origin lies at the centre of the (0,0) pixel, pixel centres are at multiples of one */
+std::array<float, 2> LocalToPixIndexCoords(const dd4hep::rec::Vector3D& local, const std::array<float, 2> pixelPitch, const std::array<size_t, 2> pixelCount);
+
+/** @brief Transform a position from pixel index coordinates to local sensor coordinates */
+dd4hep::rec::Vector3D PixIndexCoordsToLocal(const std::array<float, 2>& pixIndexCoords, const float w, const std::array<float, 2> pixelPitch, const std::array<size_t, 2> pixelCount);
 
 int GetLayer(const dd4hep::DDSegmentation::VolumeID& volumeID, const std::unique_ptr<dd4hep::DDSegmentation::BitFieldCoder>& cellIdDecoder);
 

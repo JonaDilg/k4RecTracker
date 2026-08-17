@@ -1138,61 +1138,92 @@ void VTXdigi_Modular::InitHistograms() {
   if (m_etaDistribution) {
     debug() << "Creating global histograms for eta function." << endmsg;
 
-    const std::array<unsigned int, 2> nBins = m_etaDistribution.value().GetNBins();
+    const std::array<unsigned int, 2> nPoints = m_etaDistribution.value().GetNBins();
+    verbose() << "Eta distribution has " << nPoints[0] << " bins in u and " << nPoints[1] << " bins in v." << endmsg;
 
+    // the binning is super hacky, but this is the best I can do easily now. take it with a grain of salt.
     m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_derived_u).reset(
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Global/etaDistribution_derived_u",
-        "Eta distribution in u direction as derived from the LUT;In-pixel charge deposition position [um];Cluster centre of gravity in u direction [um]",
-        { nBins[0], -0.5f * m_pixelPitch.at(0) * 1000.f, 0.5f * m_pixelPitch.at(0) * 1000.f }
+        "Eta distribution in u direction as derived from the LUT;Biased position (cluster CoG) rel. to centre of left pixel [um];Corrected position rel. to centre of left pixel [um]",
+        { nPoints[0]*10, 0.f, m_pixelPitch.at(0) * 1000.f }
       }
     );
     m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_derived_v).reset(
       new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Global/etaDistribution_derived_v",
-        "Eta distribution in v direction as derived from the LUT;In-pixel charge deposition position [um];Cluster centre of gravity in v direction [um]",
-        { nBins[1], -0.5f * m_pixelPitch.at(1) * 1000.f, 0.5f * m_pixelPitch.at(1) * 1000.f }
+        "Eta distribution in v direction as derived from the LUT;Biased position (cluster CoG) rel. to centre of left pixel [um];Corrected position rel. to centre of left pixel [um]",
+        { nPoints[1]*10, 0.f, m_pixelPitch.at(1) * 1000.f }
       }
     );
-    // directly fill the TProfiles with the eta distributions
-    for (unsigned int i_bin=0; i_bin<nBins[0]; ++i_bin) {
-      const float binCenter_local = (-0.5f + (static_cast<float>(i_bin)+0.5f)/static_cast<float>(nBins[0])) * m_pixelPitch.at(0)*1000.f;
-      const float binCollectionCoG_local = m_etaDistribution.value().GetCollectionCoG_Bin(0, i_bin) * m_pixelPitch.at(0)*1000.f;
-      (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_derived_u))[ binCenter_local ] += binCollectionCoG_local;
+
+    // directly fill the TProfiles with the eta distributions that are computed already
+    for (unsigned int i_point=0; i_point<nPoints[0]; ++i_point) {
+      const auto& [truthPos, cog] = m_etaDistribution.value().GetFunctionBinValue(0, i_point);
+      verbose() << "Filling eta distribution for u: truthPos = " << truthPos << ", cog = " << cog << endmsg;
+      (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_derived_u))[ truthPos * m_pixelPitch.at(0)*1000.f ] += cog * m_pixelPitch.at(0)*1000.f;
     }
-    for (unsigned int i_bin=0; i_bin<nBins[1]; ++i_bin) {
-      const float binCenter_local = (-0.5f + (static_cast<float>(i_bin)+0.5f)/static_cast<float>(nBins[1])) * m_pixelPitch.at(1)*1000.f;
-      const float binCollectionCoG_local = m_etaDistribution.value().GetCollectionCoG_Bin(1, i_bin) * m_pixelPitch.at(1)*1000.f;
-      (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_derived_v))[ binCenter_local ] += binCollectionCoG_local;
+    for (unsigned int i_point=0; i_point<nPoints[1]; ++i_point) {
+      const auto& [truthPos, cog] = m_etaDistribution.value().GetFunctionBinValue(1, i_point);
+      (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_derived_v))[ truthPos * m_pixelPitch.at(1)*1000.f ] += cog * m_pixelPitch.at(1)*1000.f;
     }
+
+    const int nPoints_multipl = 50;
+    m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_derived_u_interpolated).reset(
+      new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Global/etaDistribution_derived_u_interpolated",
+        "Eta distribution in u direction as derived from the LUT, interpolated between entries;Biased position (cluster CoG) rel. to centre of left pixel [um];Corrected position rel. to centre of left pixel [um]",
+        { nPoints[0]*nPoints_multipl, 0.f, m_pixelPitch.at(0) * 1000.f }
+      }
+    );
+    m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_derived_v_interpolated).reset(
+      new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
+        "Global/etaDistribution_derived_v_interpolated",
+        "Eta distribution in v direction as derived from the LUT, interpolated between entries;Biased position (cluster CoG) rel. to centre of left pixel [um];Corrected position rel. to centre of left pixel [um]",
+        { nPoints[1]*nPoints_multipl, 0.f, m_pixelPitch.at(1) * 1000.f }
+      }
+    );
+
+    for (float biasedPos = 0.f; biasedPos < 1.f; biasedPos += 1.f / (nPoints[0] * nPoints_multipl)) {
+      const float correctedPos = m_etaDistribution.value().CorrectPos(0, biasedPos);
+      (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_derived_u_interpolated))[ biasedPos * m_pixelPitch.at(0)*1000.f ] += correctedPos * m_pixelPitch.at(0)*1000.f;
+    }
+    for (float biasedPos = 0.f; biasedPos < 1.f; biasedPos += 1.f / (nPoints[1] * nPoints_multipl)) {
+      const float correctedPos = m_etaDistribution.value().CorrectPos(1, biasedPos);
+      (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_derived_v_interpolated))[ biasedPos * m_pixelPitch.at(1)*1000.f ] += correctedPos * m_pixelPitch.at(1)*1000.f;
+    }
+
+
+
+
   }
 
   m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_measured_u).reset(
     new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
       "Global/etaDistribution_measured_u",
       "Eta distribution in u direction as \"measured\" from the digiHits (only valid for single-sensor detector model in vacuum);In-pixel cluster centre of gravity in u for 2-pix clusters (um);in-pixel truth position in u (um)",
-      axis_inpix_u
+      { 50, 0.f, m_pixelPitch.at(0) * 1000.f }
     }
   );
   m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_measured_v).reset(
     new Gaudi::Accumulators::StaticProfileHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
       "Global/etaDistribution_measured_v",
       "Eta distribution in v direction as \"measured\" from the digiHits (only valid for single-sensor detector model in vacuum);In-pixel cluster centre of gravity in v for 2-pix clusters (um);in-pixel truth position in v (um)",
-      axis_inpix_v
+      { 50, 0.f, m_pixelPitch.at(1) * 1000.f }
     }
   );
 
-  m_hist2dGlobal.at(hist2dGlobal_etaDistribution_u).reset(
+  m_hist2dGlobal.at(hist2dGlobal_etaDistribution_measured_u).reset(
     new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float> {this,
-      "Global/etaDistribution_u_2D",
+      "Global/etaDistribution_measured_u_2D",
       "Eta distribution in u direction as \"measured\" from the digiHits (only valid for single-sensor detector model in vacuum);In-pixel cluster centre of gravity in u for 2-pix clusters (um);in-pixel truth position in u (um)",
       axis_inpix_u,
       axis_inpix_u
     }
   );
-  m_hist2dGlobal.at(hist2dGlobal_etaDistribution_v).reset(
+  m_hist2dGlobal.at(hist2dGlobal_etaDistribution_measured_v).reset(
     new Gaudi::Accumulators::StaticHistogram<2, Gaudi::Accumulators::atomicity::full, float> {this,
-      "Global/etaDistribution_v_2D",
+      "Global/etaDistribution_measured_v_2D",
       "Eta distribution in v direction as \"measured\" from the digiHits (only valid for single-sensor detector model in vacuum);In-pixel cluster centre of gravity in v for 2-pix clusters (um);in-pixel truth position in v (um)",
       axis_inpix_v,
       axis_inpix_v
@@ -1476,12 +1507,12 @@ void VTXdigi_Modular::FillHistograms_perDigiHit(const VTXdigi_tools::Cluster& cl
 
       if (cluster.GetSize(0) == 2) {
         (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_measured_u))[ simHitPos_inPix.x() * 1000.f ] += pos_inPix.x() * 1000.f; // convert to um
-        ++(*m_hist2dGlobal.at(hist2dGlobal_etaDistribution_u))[ {simHitPos_inPix.x() * 1000.f, pos_inPix.x() * 1000.f} ]; // convert to um
+        ++(*m_hist2dGlobal.at(hist2dGlobal_etaDistribution_measured_u))[ {simHitPos_inPix.x() * 1000.f, pos_inPix.x() * 1000.f} ]; // convert to um
       }
 
       if (cluster.GetSize(1) == 2) {
         (*m_histProfile1dGlobal.at(histProfile1dGlobal_etaDistribution_measured_v))[ simHitPos_inPix.y() * 1000.f ] += pos_inPix.y() * 1000.f; // convert to um
-        ++(*m_hist2dGlobal.at(hist2dGlobal_etaDistribution_v))[ {simHitPos_inPix.y() * 1000.f, pos_inPix.y() * 1000.f} ]; // convert to um
+        ++(*m_hist2dGlobal.at(hist2dGlobal_etaDistribution_measured_v))[ {simHitPos_inPix.y() * 1000.f, pos_inPix.y() * 1000.f} ]; // convert to um
       }
 
     }
