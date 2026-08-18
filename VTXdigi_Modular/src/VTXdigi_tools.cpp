@@ -329,14 +329,13 @@ EtaDistribution::EtaDistribution(std::array<std::vector<std::pair<float, float>>
     if (m_points[i_axis].size() < 2)
       throw std::runtime_error("EtaDistribution: need at least 2 distribution points for axis " + std::to_string(i_axis));
 
-    // points need to be delivered sorted by biased position (first element of pair) for linear interpolation to work. They also need to be monotonically increasing
+    // points need to be delivered sorted by biased position (first element of pair) for linear interpolation to work.
     for (size_t i_point=0; i_point < m_points[i_axis].size()-1; ++i_point) {
       if (m_points[i_axis][i_point].first <0 || m_points[i_axis][i_point].first > 1.0)
         throw std::runtime_error("EtaDistribution: biased position for axis " + std::to_string(i_axis) + " is out of bounds [0,1] for point " + std::to_string(i_point) + " (biased pos. " + std::to_string(m_points[i_axis][i_point].first) + ")");
+
       if (m_points[i_axis][i_point+1].first <= m_points[i_axis][i_point].first)
         throw std::runtime_error("EtaDistribution: biased positions for axis " + std::to_string(i_axis) + " are not monotonically increasing for points " + std::to_string(i_point) + " (" + std::to_string(m_points[i_axis][i_point].first) + ", " + std::to_string(m_points[i_axis][i_point].second) + ") and " + std::to_string(i_point+1) + " (" + std::to_string(m_points[i_axis][i_point+1].first) + ", " + std::to_string(m_points[i_axis][i_point+1].second) + ")");
-      if (m_points[i_axis][i_point+1].second < m_points[i_axis][i_point].second)
-        throw std::runtime_error("EtaDistribution: corrected positions for axis " + std::to_string(i_axis) + " are not monotonically increasing for points " + std::to_string(i_point) + " (" + std::to_string(m_points[i_axis][i_point].first) + ", " + std::to_string(m_points[i_axis][i_point].second) + ") and " + std::to_string(i_point+1) + " (" + std::to_string(m_points[i_axis][i_point+1].first) + ", " + std::to_string(m_points[i_axis][i_point+1].second) + ")");
     }
 
 

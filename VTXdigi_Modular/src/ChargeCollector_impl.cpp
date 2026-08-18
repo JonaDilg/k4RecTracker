@@ -452,15 +452,15 @@ std::array<std::vector<std::pair<float, float>>, 2> LookupTable::ComputeEtaDistr
       distribution.emplace_back(cog, sliceCenter);
     } // loop over bins along axis
 
-    // now, order the entries in the eta distrib by biased position (ie cog) to get a monotonically increasing function in [0,1]
+    // now, order the entries in the eta distrib by biased position (ie CoG)
     std::sort(distribution.begin(), distribution.end(), [](const std::pair<float, float>& a, const std::pair<float, float>& b) {
-      return a.second < b.second;
+      return a.first < b.first;
     });
 
-    // make cog's monotonically increasing, too
+    // remove all duplicates of biased positions
     for (auto it = distribution.begin()+1; it < distribution.end(); ) {
-      if ((it-1)->first >= (it)->first) {
-        // two sliceCenters collect to the same (or non-monotonic) CoG: keep the one with sliceCenter closer to the pixel boundary
+      if ((it-1)->first == (it)->first) {
+        // two sliceCenters collect to the same CoG: keep the one with sliceCenter closer to the pixel boundary
         if (std::abs((it-1)->second - 0.5) < std::abs(it->second - 0.5)) {
           it = distribution.erase(it-1);
           if (it == distribution.begin())
@@ -473,7 +473,6 @@ std::array<std::vector<std::pair<float, float>>, 2> LookupTable::ComputeEtaDistr
         ++it;
       }
     }
-
 
     etaDistributions[i_axis] = distribution;
   } // u/v axis
