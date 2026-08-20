@@ -13,7 +13,7 @@ using Index_pix = std::array<int, 2>;
 using Index_inPix = std::array<int, 3>;
 
 constexpr float kPathLengthTolerance = 1.05f; // tolerance factor for how much longer the computed path can be compared to the Geant4 path length. If the computed path is longer than the Geant4 path, either the linear path approximation breaks down, or the particle begins or ends inside the sensor volume
-constexpr float kLutEntryMinimum = 1.e-3f; // LUT entries below this value are set to zero, to minimise unnecessary computations in hot loop. result is quite sensitive to this, so choose carefully. 1e-5 seems to be a good compromise between accuracy and performance for the TPSCo 65nm CIS LUT
+constexpr float kLutEntryMinimum = 1.e-5f; // LUT entries below this value are set to zero, to minimise unnecessary computations in hot loop. result is quite sensitive to this, so choose carefully. 1e-5 seems to be a good compromise between accuracy and performance for the TPSCo 65nm CIS LUT
 
 /** @brief holds pixel indices i and in-pixel bin indices j (identifying one voxel of the charge-sharing grid) */
 struct Index_voxel {
