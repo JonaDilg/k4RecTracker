@@ -33,7 +33,7 @@ struct Path {
 };
 
 /** @brief Compute the factors by which to clip a path along a given axis (to clip it to the sensor volume) */
-std::array<float, 2> ComputePathClippingFactors(std::array<float, 2> t, const float entry_ax, const float travel_ax, const float sensorLength_ax);
+std::array<double, 2> ComputePathClippingFactors(std::array<double, 2> t, const double entry_ax, const double travel_ax, const double sensorLength_ax);
 
 /** @brief Construct path information from a simHit and the sensor's transformation matrix
  * @note returns true if path is valid, false otherwise. false means the path would not intersect the sensor volume */

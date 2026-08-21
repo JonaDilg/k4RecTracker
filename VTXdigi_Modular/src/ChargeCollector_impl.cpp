@@ -47,7 +47,7 @@ std::unique_ptr<IChargeCollector> CreateChargeCollector(const VTXdigi_Modular& d
 }
 
 bool ConstructPath(Path& path, const SimHitWrapper& simHit, const TGeoHMatrix& trafoMatrix, const VTXdigi_Modular&  digitizer) {
-  const float eps = 1e-6f; // reasonable for number O(0.01) (like sensor thickness in mm) with float precision
+  const double eps = 1e-12; // reasonable for number O(0.01) (like sensor thickness in mm) with float precision
 
   path.simPos = simHit.truthPos();
 
@@ -68,18 +68,18 @@ bool ConstructPath(Path& path, const SimHitWrapper& simHit, const TGeoHMatrix& t
       digitizer.warning() << "SimHit position is outside the sensor volume (local w = " << path.simPos.z() << " mm, sensor thickness = " << digitizer.ActiveVolumeDimensions().at(2) << " mm). This should never happen. Forcing it to w=0." << endmsg;
     path.simPos.z() = 0.f; // ensures no divide by zero etc
   }
-  float shiftDist_w;
+  double shiftDist_w;
   if (path.travel.z() >= 0.f) {
     shiftDist_w = path.simPos.z() + 0.5f * digitizer.ActiveVolumeDimensions().at(2);
   }
   else {
     shiftDist_w = path.simPos.z() - 0.5f * digitizer.ActiveVolumeDimensions().at(2);
   }
-  const float scaleFactor_entry = shiftDist_w / path.travel.z();
+  const double scaleFactor_entry = shiftDist_w / path.travel.z();
   path.entry = path.simPos - scaleFactor_entry * path.travel;
 
   /* Step 3 - clip path to sensor edges (in u/v) */
-  std::array<float, 2> t = {0.f, 1.f}; // parametrize path as entry + t*travel; t in [0,1]
+  std::array<double, 2> t = {0., 1.}; // parametrize path as entry + t*travel; t in [0,1]
   t = ComputePathClippingFactors(t, path.entry.x(), path.travel.x(), digitizer.ActiveVolumeDimensions().at(0));
   t = ComputePathClippingFactors(t, path.entry.y(), path.travel.y(), digitizer.ActiveVolumeDimensions().at(1));
   if (t[0] != 0.f || t[1] != 1.f) {
@@ -105,13 +105,13 @@ bool ConstructPath(Path& path, const SimHitWrapper& simHit, const TGeoHMatrix& t
     digitizer.debug() << "       - Shortening path length from " << static_cast<int>(path.travel.r()*1000) << " um to " << static_cast<int>(path.lengthG4*1000) << " um (the respective path length in Geant4)." << endmsg;
 
     /* make sure the path stays centred around the simTrackerHit position */
-    const float t_simPos = ( (path.simPos - path.entry).dot(path.travel) ) / (path.travel.r() * path.travel.r());
+    const double t_simPos = ( (path.simPos - path.entry).dot(path.travel) ) / (path.travel.r() * path.travel.r());
 
-    const float t_length_halved = 0.5f * path.lengthG4 / path.travel.r(); // length of the new path in terms of t [0,1] on old path, halved
-    const float t_center = std::max(t_length_halved, std::min(t_simPos, 1.f - t_length_halved)); // center of new path clamped to [t_length_half, 1 - t_length_half] while not exceeding [0,1]
+    const double t_length_halved = 0.5 * path.lengthG4 / path.travel.r(); // length of the new path in terms of t [0,1] on old path, halved
+    const double t_center = std::max(t_length_halved, std::min(t_simPos, 1. - t_length_halved)); // center of new path clamped to [t_length_half, 1 - t_length_half] while not exceeding [0,1]
 
-    const float t_min = t_center - t_length_halved;
-    const float t_max = t_center + t_length_halved;
+    const double t_min = t_center - t_length_halved;
+    const double t_max = t_center + t_length_halved;
 
     path.entry = path.entry + t_min * path.travel;
     path.travel = (t_max - t_min) * path.travel;
@@ -122,15 +122,15 @@ bool ConstructPath(Path& path, const SimHitWrapper& simHit, const TGeoHMatrix& t
   return true; // indicate valid path constructed
 }
 
-std::array<float, 2> ComputePathClippingFactors(std::array<float, 2> t, const float entry_ax, const float travel_ax, const float sensorLength_ax) {
+std::array<double, 2> ComputePathClippingFactors(std::array<double, 2> t, const double entry_ax, const double travel_ax, const double sensorLength_ax) {
   /* only need the components that are parallel to the axis (u/v) that we are clipping */
-  const bool positiveDir = travel_ax >= 0.f; // false -> path points in negative direction along this axis
+  const bool positiveDir = travel_ax >= 0.; // false -> path points in negative direction along this axis
 
-  const float minPos = std::min(entry_ax, entry_ax + travel_ax);
-  if (minPos < -0.5f * sensorLength_ax) {
+  const double minPos = std::min(entry_ax, entry_ax + travel_ax);
+  if (minPos < -0.5 * sensorLength_ax) {
     /* path extends out of sensor in negative direction*/
 
-    const float t_clip = (-minPos - 0.5f * sensorLength_ax) / std::abs(travel_ax);
+    const double t_clip = (-minPos - 0.5 * sensorLength_ax) / std::abs(travel_ax);
     if (positiveDir){
       t[0] = std::max(t[0], t_clip);
     } else {
@@ -138,9 +138,9 @@ std::array<float, 2> ComputePathClippingFactors(std::array<float, 2> t, const fl
     }
   }
 
-  const float maxPos = std::max(entry_ax, entry_ax + travel_ax);
-  if (maxPos > 0.5f * sensorLength_ax) {
-    const float t_clip = (maxPos - 0.5f * sensorLength_ax) / std::abs(travel_ax);
+  const double maxPos = std::max(entry_ax, entry_ax + travel_ax);
+  if (maxPos > 0.5 * sensorLength_ax) {
+    const double t_clip = (maxPos - 0.5 * sensorLength_ax) / std::abs(travel_ax);
 
     if (positiveDir) {
       t[1] = std::min(t[1], 1-t_clip);

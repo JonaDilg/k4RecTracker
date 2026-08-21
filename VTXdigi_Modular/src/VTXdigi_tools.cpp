@@ -119,10 +119,12 @@ std::array<float, 2> Trafo_local_pixIndexCoords(const dd4hep::rec::Vector3D& loc
   std::array<float, 2> pixIndex;
   for (size_t axis = 0; axis < 2; ++axis) {
     const float halfLength = 0.5 * pixelPitch[axis] * pixelCount[axis];
-    if (local_2d[axis] < -halfLength || local_2d[axis] > halfLength) {
-      throw std::runtime_error("VTXdigi_tools::ComputePixelIndexCoords(): position is out of sensor bounds");
+    if (local_2d[axis] < -halfLength - pixelPitch[axis]*0.1 || local_2d[axis] > halfLength + pixelPitch[axis]*0.1 ) {
+      // avoid throwing too eagerly for floating point precision issues at the edges (esp. with all the double-float conversions we do...). Clamp instead
+      throw std::runtime_error("VTXdigi_tools::Trafo_local_pixIndexCoords(): position" + std::to_string(local_2d[axis]) + " is out of sensor bounds [-" + std::to_string(halfLength) + ", " + std::to_string(halfLength) + "]");
     }
-    pixIndex[axis] = (local_2d[axis] + halfLength) / pixelPitch[axis] - 0.5f; // shift from [-halfLength, halfLength] to [-0.5, pixelCount - 0.5]
+    const float clamped = std::clamp(local_2d[axis], -halfLength, halfLength);
+    pixIndex[axis] = (clamped + halfLength) / pixelPitch[axis] - 0.5f; // shift from [-halfLength, halfLength] to [-0.5, pixelCount - 0.5]
   }
   return pixIndex;
 }
