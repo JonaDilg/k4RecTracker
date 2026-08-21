@@ -341,6 +341,7 @@ void VTXdigi_Modular::InitLayersAndSensors() {
       if (readoutCount != 1)
         continue;
       matchedReadoutKey = readoutKey;
+      verbose() << "     - Readout \"" << readoutKey << "\" MATCHES SimTrackHitCollectionName \"" << simHitCollectionName << "\". Getting segmentation." << endmsg;
 
       const dd4hep::Segmentation& segmentation = m_detector->readout(readoutKey).segmentation();
       if (!segmentation.isValid())
@@ -750,35 +751,35 @@ void VTXdigi_Modular::InitHistograms() {
     hist1d.at(hist1d_residual_u_toPrimaries).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_u_toPrimaries",
-        "Residual (u_digiHit - u_simHit) wrt. all simHits from primary particles that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
+        "Residual (u_simHit - u_digiHit) wrt. all simHits from primary particles that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
         axis_residual
       }
     );
     hist1d.at(hist1d_residual_u_toSecondaries).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_u_toSecondaries",
-        "Residual (u_digiHit - u_simHit) wrt. all simHits from secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
+        "Residual (u_simHit - u_digiHit) wrt. all simHits from secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
         axis_residual
       }
     );
     hist1d.at(hist1d_residual_u_toPrimariesSecondaries).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_u_toPrimariesSecondaries",
-        "Residual (u_digiHit - u_simHit) wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
+        "Residual (u_simHit - u_digiHit) wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
         axis_residual
       }
     );
     hist1d.at(hist1d_residual_u_toPrimariesSecondariesDeltas).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_u_toPrimariesSecondariesDeltas",
-        "Residual (u_digiHit - u_simHit) wrt. all simHits from primary and secondary particles (including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
+        "Residual (u_simHit - u_digiHit) wrt. all simHits from primary and secondary particles (including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
         axis_residual
       }
     );
     hist1d.at(hist1d_residual_u_maxEParticleOnSensor).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_u_maxEParticleOnSensor",
-        "Residual (u_digiHit - u_simHit) in local u direction, to the simHit with the highest energy MCParticle on the sensor - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
+        "Residual (u_simHit - u_digiHit) in local u direction, to the simHit with the highest energy MCParticle on the sensor - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
         axis_residual
       }
     );
@@ -786,35 +787,35 @@ void VTXdigi_Modular::InitHistograms() {
     hist1d.at(hist1d_residual_u_toPrimariesSecondaries_length1).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_u_toPrimariesSecondaries_length1",
-        "Residual (u_digiHit - u_simHit), clusters with length 1 pix, in local u direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
+        "Residual (u_simHit - u_digiHit), clusters with length 1 pix, in local u direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
         axis_residual
       }
     );
     hist1d.at(hist1d_residual_u_toPrimariesSecondaries_length2).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_u_toPrimariesSecondaries_length2",
-        "Residual (u_digiHit - u_simHit), clusters with length 2 pix, in local u direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
+        "Residual (u_simHit - u_digiHit), clusters with length 2 pix, in local u direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
         axis_residual
       }
     );
     hist1d.at(hist1d_residual_u_toPrimariesSecondaries_length3).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_u_toPrimariesSecondaries_length3",
-        "Residual (u_digiHit - u_simHit), clusters with length 3 pix, in local u direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
+        "Residual (u_simHit - u_digiHit), clusters with length 3 pix, in local u direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
         axis_residual
       }
     );
     hist1d.at(hist1d_residual_u_toPrimariesSecondaries_length4).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_u_toPrimariesSecondaries_length4",
-        "Residual (u_digiHit - u_simHit), clusters with length 4 pix, in local u direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
+        "Residual (u_simHit - u_digiHit), clusters with length 4 pix, in local u direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
         axis_residual
       }
     );
     hist1d.at(hist1d_residual_u_toPrimariesSecondaries_length5plus).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_u_toPrimariesSecondaries_length5plus",
-        "Residual (u_digiHit - u_simHit), clusters with length 5+ pix, in local u direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
+        "Residual (u_simHit - u_digiHit), clusters with length 5+ pix, in local u direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual u [um];Entries",
         axis_residual
       }
     );
@@ -822,35 +823,35 @@ void VTXdigi_Modular::InitHistograms() {
     hist1d.at(hist1d_residual_v_toPrimaries).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_v_toPrimaries",
-        "Residual (v_digiHit - v_simHit) wrt. all simHits from primary particles that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
+        "Residual (v_simHit - v_digiHit) wrt. all simHits from primary particles that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
         axis_residual
       }
     );
     hist1d.at(hist1d_residual_v_toSecondaries).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_v_toSecondaries",
-        "Residual (v_digiHit - v_simHit) wrt. all simHits from secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
+        "Residual (v_simHit - v_digiHit) wrt. all simHits from secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
         axis_residual
       }
     );
     hist1d.at(hist1d_residual_v_toPrimariesSecondaries).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_v_toPrimariesSecondaries",
-        "Residual (v_digiHit - v_simHit) wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
+        "Residual (v_simHit - v_digiHit) wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
         axis_residual
       }
     );
     hist1d.at(hist1d_residual_v_toPrimariesSecondariesDeltas).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_v_toPrimariesSecondariesDeltas",
-        "Residual (v_digiHit - v_simHit) wrt. all simHits from primary and secondary particles (including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
+        "Residual (v_simHit - v_digiHit) wrt. all simHits from primary and secondary particles (including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
         axis_residual
       }
     );
     hist1d.at(hist1d_residual_v_maxEParticleOnSensor).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_v_maxEParticleOnSensor",
-        "Residual (v_digiHit - v_simHit) in local v direction, to the simHit with the highest energy MCParticle on the sensor - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
+        "Residual (v_simHit - v_digiHit) in local v direction, to the simHit with the highest energy MCParticle on the sensor - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
         axis_residual
       }
     );
@@ -858,35 +859,35 @@ void VTXdigi_Modular::InitHistograms() {
     hist1d.at(hist1d_residual_v_toPrimariesSecondaries_length1).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_v_toPrimariesSecondaries_length1",
-        "Residual (v_digiHit - v_simHit), clusters with length 1 pix, in local v direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
+        "Residual (v_simHit - v_digiHit), clusters with length 1 pix, in local v direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
         axis_residual
       }
     );
     hist1d.at(hist1d_residual_v_toPrimariesSecondaries_length2).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_v_toPrimariesSecondaries_length2",
-        "Residual (v_digiHit - v_simHit), clusters with length 2 pix, in local v direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
+        "Residual (v_simHit - v_digiHit), clusters with length 2 pix, in local v direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
         axis_residual
       }
     );
     hist1d.at(hist1d_residual_v_toPrimariesSecondaries_length3).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_v_toPrimariesSecondaries_length3",
-        "Residual (v_digiHit - v_simHit), clusters with length 3 pix, in local v direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
+        "Residual (v_simHit - v_digiHit), clusters with length 3 pix, in local v direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
         axis_residual
       }
     );
     hist1d.at(hist1d_residual_v_toPrimariesSecondaries_length4).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_v_toPrimariesSecondaries_length4",
-        "Residual (v_digiHit - v_simHit), clusters with length 4 pix, in local v direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
+        "Residual (v_simHit - v_digiHit), clusters with length 4 pix, in local v direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
         axis_residual
       }
     );
     hist1d.at(hist1d_residual_v_toPrimariesSecondaries_length5plus).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/digiHit_residuals/residual_v_toPrimariesSecondaries_length5plus",
-        "Residual (v_digiHit - v_simHit), clusters with length 5 pix, in local v direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
+        "Residual (v_simHit - v_digiHit), clusters with length 5 pix, in local v direction, wrt. all simHits from primary and secondary particles (not including delta rays) that contribute to this digiHit - Layer " + std::to_string(layer) + ";Residual v [um];Entries",
         axis_residual
       }
     );
@@ -1558,7 +1559,7 @@ void VTXdigi_Modular::FillHistograms_perDigiHit(const VTXdigi_tools::Cluster& cl
 
     const dd4hep::rec::Vector3D simHitPos_local = simHit->truthPos();
     const dd4hep::rec::Vector3D simHitPos_global = VTXdigi_tools::Trafo_local_global(simHitPos_local, trafoMatrix);
-    const dd4hep::rec::Vector3D residual_local = pos_local - simHitPos_local; // residual = observed - predicted
+    const dd4hep::rec::Vector3D residual_local = simHitPos_local - pos_local; // residual = predicted - observed
 
     const float hit_z = simHitPos_global.z();
 
@@ -1670,7 +1671,7 @@ void VTXdigi_Modular::FillHistograms_perSensor(const std::vector<VTXdigi_tools::
     const dd4hep::rec::Vector3D pos_global = VTXdigi_tools::ConvertVector(digiHit.getPosition());
     const dd4hep::rec::Vector3D pos_local = VTXdigi_tools::Trafo_global_local(pos_global, trafoMatrix);
 
-    const dd4hep::rec::Vector3D residual_local = pos_local - simHitMaxE_pos_local; // residual = observed - predicted
+    const dd4hep::rec::Vector3D residual_local = simHitMaxE_pos_local - pos_local; // residual = predicted - observed
 
     ++(*m_hist1d.at(layer).at(hist1d_residual_u_maxEParticleOnSensor))[ residual_local.x()*1000.f ];
     ++(*m_hist1d.at(layer).at(hist1d_residual_v_maxEParticleOnSensor))[ residual_local.y()*1000.f ];
