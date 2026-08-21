@@ -407,7 +407,7 @@ std::array<float, 2> Cluster::ComputeCoG() const {
   return pos;
 }
 
-std::array<float, 2> Cluster::ComputeCoG_EtaCorrected(const EtaDistribution& etaDistrib) const {
+std::array<float, 2> Cluster::ComputeCoG_EtaCorrected(const EtaDistribution& etaDistrib, const bool corrLongClusters) const {
   std::array<float, 2> pos{0.f, 0.f};
 
   for (int axis=0; axis<2; ++axis) {
@@ -416,8 +416,18 @@ std::array<float, 2> Cluster::ComputeCoG_EtaCorrected(const EtaDistribution& eta
       // no eta correction
       pos[axis] = pixels.front()->index[axis];
     }
+    else if (!corrLongClusters && clstLength > 2) {
+      // naive center of gravity (no eta correction) for clusters longer than 2 pixels
+      float sum = 0.f;
+
+      for (const Pixel* pix : pixels) {
+        sum += pix->index[axis] * pix->charge;
+      }
+      pos[axis] = sum / charge;
+    }
     else {
-      // apply eta correction for clusters of length >= 2 (for longer clusters, only consider the first and last pixels along this axis, a la https://cds.cern.ch/record/687475/files/note02_049.pdf)
+      // apply eta correction
+      // if selected in corrLongClusters: for clusters of length >= 2 we only consider the first and last pixels along this axis, a la https://cds.cern.ch/record/687475/files/note02_049.pdf)
 
       // find pixels in first and last bin along this axis
       int i_first=std::numeric_limits<int>::max(), i_last=std::numeric_limits<int>::min();

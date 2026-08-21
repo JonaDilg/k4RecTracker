@@ -134,6 +134,7 @@ private:
   Gaudi::Property<float> m_smearing_threshold{this, "ThresholdDispersion", 0.0f, "Gaussian smearing to be applied to the threshold. (in e-). Drawn per event per sensor per pixel. If 0, no dispersion is applied. Defaults to 0."};
   Gaudi::Property<float> m_smearing_time{this, "TimeSmearing", 0.0f, "Gaussian smearing to be applied to a pixels time (in ns). Applied to the digiHits time stamp. If 0, no time smearing is applied. Defaults to 0."};
   Gaudi::Property<bool> m_eta_correct{this, "ApplyEtaCorrection", false, "Flag to apply eta correction to the cluster positions (errors if no eta distribution function is available). Defaults to false."};
+  Gaudi::Property<bool> m_eta_correct_longClusters{this, "ApplyEtaCorrectionToLongClusters", false, "Canonically, the eta correction is applied to clusters with length 2. If enabled, the eta correction is applied to clusters with length >= 2. Defaults to false."};
   Gaudi::Property<bool> m_eta_distribution_from_chargeCollector{this, "ExtractEtaDistributionFromChargeCollector", false, "Flag to extract eta distribution from the charge collector. Only used if ApplyEtaCorrection is true."};
 
   Gaudi::Property<bool> m_debugHistograms{this, "DebugHistograms", false, "Flag to create and fill debug histograms. Not recommended for multithreading, might lead to crashes. Default is false."};

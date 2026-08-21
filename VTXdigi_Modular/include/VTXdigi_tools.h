@@ -110,8 +110,9 @@ struct Cluster {
 
   /** @brief Compute the charge-weighted centre-of-gravity of a cluster in terms of pixel inx coordinates
    * @param etaDistrib EtaDistribution object to correct the CoG for charge collection biases
+   * @param corrLongClusters Whether to apply eta correction to long clusters
    * @returns CoG in terms of pixel index coordinates */
-  std::array<float, 2> ComputeCoG_EtaCorrected(const EtaDistribution& etaDistrib) const;
+  std::array<float, 2> ComputeCoG_EtaCorrected(const EtaDistribution& etaDistrib, const bool corrLongClusters) const;
 
   /** @brief Compute the uncertainty of the charge-weighted centre-of-gravity of a cluster in terms of pixel index coordinates
    * @param pos This cluster's CoG (to avoid re-computing it) in terms of pixel index coordinates */

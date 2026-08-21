@@ -40,9 +40,11 @@ StatusCode VTXdigi_Modular::initialize() {
       info() << " - Successfully set eta distribution by extracting it from charge collector" << endmsg;
     }
     else {
-      error() << " - ApplyEtaCorrection is true, but m_LUT_extractEtaDistribution is false. As of now, the only way of loading an eta distribution is by extracting it from the LUT." << endmsg;
+      throw GaudiException(" - ApplyEtaCorrection is true, but m_LUT_extractEtaDistribution is false. As of now, the only way of loading an eta distribution is by extracting it from the LUT.", "VTXdigi_Modular::InitServicesAndGeometry()", StatusCode::FAILURE);
     }
   }
+  else if (m_eta_correct_longClusters.value())
+    throw GaudiException("Property ApplyEtaCorrectionToLongClusters is true, but ApplyEtaCorrection is false. The eta correction will not be applied to any clusters.", "VTXdigi_Modular::InitServicesAndGeometry()", StatusCode::FAILURE);
 
   if (m_debugHistograms)
   // needs to run after charge collector & eta function are initialised
@@ -1378,7 +1380,7 @@ void VTXdigi_Modular::CreateDigiHits(edm4hep::TrackerHitPlaneCollection& digiHit
     std::array<float, 2> clusterPos_index({0.f, 0.f});
     if (m_eta_correct.value() && m_etaDistribution) {
       verbose() << "     - Determining eta-corrected cluster position." << endmsg;
-      clusterPos_index = cluster.ComputeCoG_EtaCorrected(m_etaDistribution.value());
+      clusterPos_index = cluster.ComputeCoG_EtaCorrected(m_etaDistribution.value(), m_eta_correct_longClusters.value());
     }
     else {
       verbose() << "     - Determining cluster position (without eta correction)." << endmsg;
