@@ -4,6 +4,13 @@ Developed by Jona Dilg (jona.dilg@cern.ch), Armin Ilg. 2026.
 ## Description
 The vertex digitizer creates digiHits from simHits by `TrackerHitPlane` by simulating the deposition and subsequent collection of charges in the sensor. The exact implementation of charge collection is user-definable.
 
+This algorithms does two distinct things:
+- Produce realistic pixel hits from simHits by simulating charge collection
+- Cluster these pixel hits and estimate the cluster positions (can be disabled, expected to be superseded)
+
+Clusterisation is included in the digitizer because as of now, there are no stand-alone pixel sensor clustering algorithms in the FCC stack. In the future, we expect a stand-alone clustering algorithm (or and end-to-end tracking algorithm) to be implemented, which will make the clustering in this digitizer obsolete.
+
+
 ### Output
 Produces EDM4hep `TrackerHitPlane` hits (referred to as digiHits), either per pixel hit or per cluster (via charge-weighted centroid & η-correction). For each `TrackerHitPlane`, creates a `TrackerHitSimTrackerHitLink` to each `SimTrackerHit` that contributed charge to any involved pixel.
 
@@ -34,31 +41,6 @@ Shares charge among a hits surrounding pixels according to a lookup table. These
 - Further information:
     - This talk in the DRD3 WG4 (Simulation) Meeting contains more information on the implementation and preliminary results: https://indico.cern.ch/event/1658032/contributions/6968509/attachments/3239139/5776904/2026-03-16_DRD3-WG4.pdf
     - A previous version of the talk was also held in the FCC Full Sim Working Meeting: https://indico.cern.ch/event/1613709/contributions/6814309/attachments/3190168/5677333/2025-12-10_FCC-FullSym-WorkingMeeting-3.pdf
-
-### η correction
-When a particle crosses the boundary between two adjacent pixels, both pixels share the deposited charge. If `Clusterize` is set to true, each clusters position is estimated via a charge-weighted centroid (center of gravity algorithm, CoG). This naive estimate is not linear in the true impact position: because of non-linearities in charge-sharing, positions near the pixel centres are over-represented and positions near the boundary are expanded non-uniformly. Plotted against the true position, the naive estimate traces an S-curve, the so-called η-distribution.
-
-The η-distribution is only defined for 2-pixel wide clusters, one η-distribution for each of the two sensor axes. The x-axis is the biased cluster position (from CoG) and the y-axis is the corrected (true) cluster centre. In this way, the η-distribution can be used in the reconstruction to correct each clusters position.
-
-The η-distribution is parametrised in the range [0,1]: x=0 is the left pixel's centre, x=0.5 is the pixel boundary, x=1 is the right pixel's centre. We assume that the η-distribution is the same for every pair of pixels on a sensor (along a given axis, u or v).
-
-Note that the η-distributions output η(x) is NOT bound to [0,1]. This means that it can also correct for constant offsets along the axis (eg. a 2T external B-field causing a ~3 um Lorentz shift). Generally, the η-distribution should map [0,1] onto a range that is 1 wide (ie. [0,1] -> [0+d,1+d]) to get an un-biased cluster CoG correction.
-
-One way to input the eta distribution is numerically as a set of (biased pos. , corrected pos.) points. The points are interpolated linearly. If there is no point at the lower boundary (biased pos. = 0), it is interpolated by using the wrapping property of the η-distribution ( η(x-1) = η(x)-1 ). For computation, the biased pos. of consecutive points need to be strictly monotonically rising (ie. (`biasedPos[i+1]` > `biasedPos[i]`) at float precision).
-
-Alternatively, the η-distribution can be extracted automatically from the charge collector. So far, this is only implemented for the Lookup table-based charge collector.
-
-#### Extracting the η-distribution from the lookup table
-If the lookup table charge collector is chosen, the η-distribution can be extracted from the LUT automatically (see [Gaudi Properties](#gaudi-properties)).
-
-Note that doing so will intrinsically undo the offset caused by external B-fields that were simulated when generating the LUT. This is feeding truth-level information (the LUT that the clusters are generated from) into the hit reconstruction, which we generally want to avoid. Yet, real reconstruction algorithms will likely use a similar approach to undo the offset caused by the external magnetic field. For now, we utilise this "feature", because it saves us from doing a manual Lorentz shift correction somewhere else.
-
-Explanation of extracting the two η-distribution (u/v) from the LUT:
-- For every in-pixel voxel, the LUT contains a 5x5 matrix representing to which of the 5x5 surrounding pixels charge from that voxel is shared. By taking the charge-weighted centroid of that voxel's 5x5 matrix, we get the position where a hit in this voxel will be reconstructed (referred to as **biased position**). The voxels position is the **corrected position**.
-- The η-distributions are 1-dimensional (say along u-axis), while the LUT is 3-dimensional (u,v,w-axes). We project the 3d-LUT onto a single axis by averaging over all bins along the other two axes. For each slice of the LUT, this calulates the position where clusters from this slice are reconstructed to via naive CoG.
-- The LUT is defined for one pixel (from left edge to right edge [-0.5,0.5]), but the η-distribution is definition is defined between two pixel centres (from one pixel centre to the next [0,1]). The [0,0.5] range can stay as is, but the [-0.5,0] range needs to be shifted by 1 (using the wrapping property of the η-distribution).
-- For the correction to work, we order the the η-distribution points (biased pos, corrected pos) by biased pos.
-- We also need to remove all entries with duplicate biased pos. (this would lead to undefined behaviour). For each pair of points with the same biased pos, we keep the one with corrected pos closer to the pixel boundary. This choice is arbitrary, but makes sure that even supplying a LUT without any charge-sharing will produce a somewhat valid eta distribution (only one point close to the pixel boundary is left, linear interpolation with the wrapping property leads to a perfect diagonal which is what we want).
 
 ## Gaudi Properties
 - `SubDetectorName` - Name of the subdetector (eg. `Vertex`)
@@ -203,3 +185,38 @@ The code has a number of `TODO:` and `FIXME:` marked. Larger items are:
 - *(low)* **Timing information in LUT** -- Currently, LUTs do not store any information on the signal shape charges in a given voxel will produce on the electrodes. Timestamps are simply taken from the simHits and smeared. Yet, charges from different voxels can take drastically different times (TPSCo 65nm CIS: O(ns)) to collect. Thus, the timestamps and amplitude of pixel hits might be changed. To simulate this, each LUT entry would need to encode not only the amount of shared charge, but also a parametrisation of the pixel response function. This is computationally expensive, and not implemented in Allpix Squared either. An exact algorithm on how to implement this time encoding is not yet clear.
 - *(low)* **Gaussian-smearing based digitizer** -- Implementing such an algorithm here would simplify repository. Because the charge collector acts on pixels (and not on positions like the Gaussian-smearing), this is non-trivial and would require a check in the beginning of the event loop.
 -
+
+
+## η corrections
+I implemented an eta-correction algorithm (extract the eta functions from the LUT & apply them to the cluster center of gravity), see the [feature branch](https://github.com/JonaDilg/k4RecTracker/tree/VTXdigi_Modular_EtaCorrection) or the [permaling to the last relevant commit](https://github.com/JonaDilg/k4RecTracker/commit/a1174c95018be937b0cb1f6f501b65b96b0991d0).
+
+This worked well for for particles with near-vertical incidence angles, but worsened resolution for shallow tracks (because I did not account for the track angle). I had hoped the angular dependence would be small enough to ignore for now, which turned out to be wrong. Thus, I removed all η correction code from the digitizer. Here are the notes I wrote on the topic.
+
+### η correction
+When a particle crosses the boundary between two adjacent pixels, both pixels share the deposited charge. If `Clusterize` is set to true, each clusters position is estimated via a charge-weighted centroid (center of gravity algorithm, CoG). This naive estimate is not linear in the true impact position: because of non-linearities in charge-sharing, positions near the pixel centres are over-represented and positions near the boundary are expanded non-uniformly. Plotted against the true position, the naive estimate traces an S-curve, the so-called η-distribution.
+
+The η-distribution is only defined for 2-pixel wide clusters, one η-distribution for each of the two sensor axes. The x-axis is the biased cluster position (from CoG) and the y-axis is the corrected (true) cluster centre. In this way, the η-distribution can be used in the reconstruction to correct each clusters position.
+
+The η-distribution is parametrised in the range [0,1]: x=0 is the left pixel's centre, x=0.5 is the pixel boundary, x=1 is the right pixel's centre. We assume that the η-distribution is the same for every pair of pixels on a sensor (along a given axis, u or v).
+
+Note that the η-distributions output η(x) is NOT bound to [0,1]. This means that it can also correct for constant offsets along the axis (eg. a 2T external B-field causing a ~3 um Lorentz shift). Generally, the η-distribution should map [0,1] onto a range that is 1 wide (ie. [0,1] -> [0+d,1+d]) to get an un-biased cluster CoG correction.
+
+One way to input the eta distribution is numerically as a set of (biased pos. , corrected pos.) points. The points are interpolated linearly. If there is no point at the lower boundary (biased pos. = 0), it is interpolated by using the wrapping property of the η-distribution ( η(x-1) = η(x)-1 ). For computation, the biased pos. of consecutive points need to be strictly monotonically rising (ie. (`biasedPos[i+1]` > `biasedPos[i]`) at float precision).
+
+Alternatively, the η-distribution can be extracted automatically from the charge collector. So far, this is only implemented for the Lookup table-based charge collector.
+
+#### Extracting the η-distribution from the lookup table
+If the lookup table charge collector is chosen, the η-distribution can be extracted from the LUT automatically (see [Gaudi Properties](#gaudi-properties)).
+
+Note that doing so will intrinsically undo the offset caused by external B-fields that were simulated when generating the LUT. This is feeding truth-level information (the LUT that the clusters are generated from) into the hit reconstruction, which we generally want to avoid. Yet, real reconstruction algorithms will likely use a similar approach to undo the offset caused by the external magnetic field. For now, we utilise this "feature", because it saves us from doing a manual Lorentz shift correction somewhere else.
+
+Explanation of extracting the two η-distribution (u/v) from the LUT:
+- For every in-pixel voxel, the LUT contains a 5x5 matrix representing to which of the 5x5 surrounding pixels charge from that voxel is shared. By taking the charge-weighted centroid of that voxel's 5x5 matrix, we get the position where a hit in this voxel will be reconstructed (referred to as **biased position**). The voxels position is the **corrected position**.
+- The η-distributions are 1-dimensional (say along u-axis), while the LUT is 3-dimensional (u,v,w-axes). We project the 3d-LUT onto a single axis by averaging over all bins along the other two axes. For each slice of the LUT, this calulates the position where clusters from this slice are reconstructed to via naive CoG.
+- The LUT is defined for one pixel (from left edge to right edge [-0.5,0.5]), but the η-distribution is definition is defined between two pixel centres (from one pixel centre to the next [0,1]). The [0,0.5] range can stay as is, but the [-0.5,0] range needs to be shifted by 1 (using the wrapping property of the η-distribution).
+- For the correction to work, we order the the η-distribution points (biased pos, corrected pos) by biased pos.
+- We also need to remove all entries with duplicate biased pos. (this would lead to undefined behaviour). For each pair of points with the same biased pos, we keep the one with corrected pos closer to the pixel boundary. This choice is arbitrary, but makes sure that even supplying a LUT without any charge-sharing will produce a somewhat valid eta distribution (only one point close to the pixel boundary is left, linear interpolation with the wrapping property leads to a perfect diagonal which is what we want).
+
+### Angular dependence of the η-distribution
+
+The η-distribution is only valid for a given incidence angle of the particle. Even when applying it only for clusters of size 2, it worsens the spatial resolution for shallower tracks (~60 deg with the LUT I was using in the test).

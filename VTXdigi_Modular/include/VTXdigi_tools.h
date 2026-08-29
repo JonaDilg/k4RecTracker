@@ -18,8 +18,6 @@ namespace VTXdigi_tools {
 
 constexpr float kChargePerkeV = 273.97f; // in electrons, for silicon (1 eh-pair ~ 3.65 eV)
 
-class EtaDistribution;
-
 /* -- SimHitWrapper -- */
 
 enum class MCParticleLevel {
@@ -108,12 +106,6 @@ struct Cluster {
    * @returns CoG in terms of pixel index coordinates */
   std::array<float, 2> ComputeCoG() const;
 
-  /** @brief Compute the charge-weighted centre-of-gravity of a cluster in terms of pixel inx coordinates
-   * @param etaDistrib EtaDistribution object to correct the CoG for charge collection biases
-   * @param corrLongClusters Whether to apply eta correction to long clusters
-   * @returns CoG in terms of pixel index coordinates */
-  std::array<float, 2> ComputeCoG_EtaCorrected(const EtaDistribution& etaDistrib, const bool corrLongClusters) const;
-
   /** @brief Compute the uncertainty of the charge-weighted centre-of-gravity of a cluster in terms of pixel index coordinates
    * @param pos This cluster's CoG (to avoid re-computing it) in terms of pixel index coordinates */
   std::array<float, 2> ComputeCoGUncertainty(const std::array<float, 2>& pos) const;
@@ -122,31 +114,6 @@ struct Cluster {
 /** @brief Get the indices of all direct neighbors of a pixel */
 std::array<std::array<int, 2>, 4> GetDirectNeighbors(const std::array<int, 2>& i_uv);
 std::array<std::array<int, 2>, 8> GetNeighbors(const std::array<int, 2>& i_uv);
-
-/* -- Eta correction -- */
-
-/** @brief A class to represent the eta correction distributions
- * @note The distribution may be derived for a given LUT
- * @note Per LUT bin along the u (v) axis, the distribution encodes the (biased position, corrected position) pair that a charge deposited evenly across this bin would cause */
-class EtaDistribution {
-  std::array<std::vector<std::pair<float, float>>, 2> m_points; // (biased pos, corrected pos)
-  std::array<std::vector<float>, 2> m_slopes; // dTruthPos/dCoG between consecutive m_points
-
-public:
-  EtaDistribution(std::array<std::vector<std::pair<float, float>>, 2> distributionPoints);
-
-  inline unsigned int GetNBins(const int axis) const { return m_points.at(axis).size(); };
-  inline std::array<unsigned int, 2> GetNBins() const { return {GetNBins(0), GetNBins(1)}; };
-
-  /** @brief Correct a biased position along an axis using the eta distribution
-   * @param biasedPos biased position offset to last pixel centre in terms of in-pixel coordinate [0, 1] (0 = left pixel centre, 1 = right pixel centre)
-   * @returns Corrected position along the axis */
-  float CorrectPos(const int axis, const float biasedPos) const;
-
-  /** @brief Get the (biased position, corrected position) pair stored at a given bin, in terms of in-pixel coordinate t [-0.5, 0.5]
-   * @note biased position is confined to [-0.5, 0.5]; corrected position is not pinned to that range and may extend beyond it (e.g. under a strong Lorentz shift) */
-  const std::pair<float, float>& GetFunctionBinValue(const int axis, const unsigned int bin) const;
-};
 
 /* -- HitMap -- */
 

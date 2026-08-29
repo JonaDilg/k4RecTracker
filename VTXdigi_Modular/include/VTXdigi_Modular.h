@@ -119,6 +119,7 @@ private:
   Gaudi::Property<std::string> m_geoServiceName{this, "GeoSvcName", "GeoSvc", "The name of the GeoSvc instance"};
   Gaudi::Property<std::string> m_encodingStringVariable{this, "EncodingStringParameterName", "GlobalTrackerReadoutID", "The name of the DD4hep constant that contains the Encoding string for tracking detectors"};
   Gaudi::Property<bool> m_clusterize{this, "Clusterize", true, "Whether to clusterize hits or not. If false, each pixel hit is output as a separate trackerHit. If true, the cluster centre and total charge are output."};
+  // TODO: Add option to only use end-pixels in long clusters
 
 
   /* -- Properties mainlyrelated to the main event loop -- */
@@ -133,9 +134,6 @@ private:
   Gaudi::Property<float> m_smearing_charge{this, "ChargeSmearing", 0.0f, "Gaussian smearing to be applied to a pixels collected charge (in e-). Applied after charge collection but before thresholding. If 0, no noise is applied. Defaults to 0."};
   Gaudi::Property<float> m_smearing_threshold{this, "ThresholdDispersion", 0.0f, "Gaussian smearing to be applied to the threshold. (in e-). Drawn per event per sensor per pixel. If 0, no dispersion is applied. Defaults to 0."};
   Gaudi::Property<float> m_smearing_time{this, "TimeSmearing", 0.0f, "Gaussian smearing to be applied to a pixels time (in ns). Applied to the digiHits time stamp. If 0, no time smearing is applied. Defaults to 0."};
-  Gaudi::Property<bool> m_eta_correct{this, "ApplyEtaCorrection", false, "Flag to apply eta correction to the cluster positions (errors if no eta distribution function is available). Defaults to false."};
-  Gaudi::Property<bool> m_eta_correct_longClusters{this, "ApplyEtaCorrectionToLongClusters", false, "Canonically, the eta correction is applied to clusters with length 2. If enabled, the eta correction is applied to clusters with length >= 2. Defaults to false."};
-  Gaudi::Property<bool> m_eta_distribution_from_chargeCollector{this, "ExtractEtaDistributionFromChargeCollector", false, "Flag to extract eta distribution from the charge collector. Only used if ApplyEtaCorrection is true."};
 
   Gaudi::Property<bool> m_debugHistograms{this, "DebugHistograms", false, "Flag to create and fill debug histograms. Not recommended for multithreading, might lead to crashes. Default is false."};
   Gaudi::Property<int> m_infoPrintInterval{this, "InfoPrintInterval", 100, "Interval for printing information during processing."};
@@ -159,7 +157,6 @@ private:
   /* -- Member variables -- */
 
   std::unique_ptr<VTXdigi_tools::IChargeCollector> m_chargeCollector = nullptr;
-  std::optional<VTXdigi_tools::EtaDistribution> m_etaDistribution = std::nullopt;
 
   std::array<size_t, 2> m_pixelCount = {0, 0};
   std::array<float, 2> m_pixelPitch = {0.0f, 0.0f};
@@ -339,40 +336,4 @@ private:
     >,
     hist1dglobalArrayLen
   > m_hist1dglobal;
-
-  enum {
-    histProfile1dGlobal_etaDistribution_derived_u,
-    histProfile1dGlobal_etaDistribution_derived_u_interpolated,
-    histProfile1dGlobal_etaDistribution_derived_v,
-    histProfile1dGlobal_etaDistribution_derived_v_interpolated,
-    histProfile1dGlobal_etaDistribution_measured_u,
-    histProfile1dGlobal_etaDistribution_measured_v,
-    histProfile1dGlobalArrayLen
-  };
-  std::array<
-    std::unique_ptr<
-      Gaudi::Accumulators::StaticProfileHistogram<
-        1,
-        Gaudi::Accumulators::atomicity::full,
-        float
-      >
-    >,
-    histProfile1dGlobalArrayLen
-  > m_histProfile1dGlobal;
-
-  enum {
-    hist2dGlobal_etaDistribution_measured_u,
-    hist2dGlobal_etaDistribution_measured_v,
-    hist2dGlobalArrayLen
-  };
-  std::array<
-    std::unique_ptr<
-      Gaudi::Accumulators::StaticHistogram<
-        2,
-        Gaudi::Accumulators::atomicity::full,
-        float
-      >
-    >,
-    hist2dGlobalArrayLen
-  > m_hist2dGlobal;
-}; // class VTXdigi_Modular
+};

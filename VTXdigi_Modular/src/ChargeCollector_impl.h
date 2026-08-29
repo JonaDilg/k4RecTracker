@@ -7,7 +7,6 @@
 namespace VTXdigi_tools {
 class SimHitWrapper; // forward-declaration for include/VTXdigi_tools.h
 class HitMap; // forward-declaration for include/VTXdigi_tools.h
-class EtaDistribution; // forward-declaration for include/VTXdigi_tools.h
 
 using Index_pix = std::array<int, 2>;
 using Index_inPix = std::array<int, 3>;
@@ -81,8 +80,6 @@ public:
   inline int GetBinCount(int i) const { return m_binCount.at(i); }
   inline Index_inPix GetBinCount() const { return m_binCount; }
 
-  std::array<std::vector<std::pair<float, float>>, 2> ComputeEtaDistribution() const;
-
 private:
 
   /** @brief Convert 3D in-pixel bin indices and a matrix row/column to a flat index for m_matrices */
@@ -107,10 +104,6 @@ public:
   explicit ChargeCollector_LUT(const VTXdigi_Modular& digitizer);
 
   void FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix) const override;
-
-  std::optional< std::array<std::vector<std::pair<float, float>>, 2> > ComputeEtaDistribution() const override {
-    return std::make_optional(m_LUT.ComputeEtaDistribution());
-  };
 
 private:
 
