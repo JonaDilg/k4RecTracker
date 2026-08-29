@@ -1509,21 +1509,46 @@ void VTXdigi_Modular::FillHistograms_perSensor(const std::vector<VTXdigi_tools::
 
   // among simHits, find the one with the MCParticle with the highest energy
   // (needed for comparing to Allpix Squared residuals, when simulating single sensor with particle gun)
+  // in case there are multiple simHits from the same MCParticle, any is fine
   size_t maxE_index = 0;
   float maxE = simHits.at(0).hitPtr()->getParticle().getEnergy(); // assume this is in GeV. Documentation is not clear
 
   for (size_t i = 1; i < simHits.size(); ++i) {
     const VTXdigi_tools::SimHitWrapper& simHit = simHits.at(i);
     const edm4hep::MCParticle mcParticle = simHit.hitPtr()->getParticle();
-    if (mcParticle.getEnergy() > maxE && !simHit.hitPtr()->isProducedBySecondary() ) {
-      // we want to find the primary particle (assuming we only shot a single particle in simulation) -> neede to reject simHits with indirect MCParticle link
+    if (mcParticle.getEnergy() > maxE && simHit.mcParticleLevel() == VTXdigi_tools::MCParticleLevel::Primary) {
+      // we want to find the primary particle (assuming we only shot a single particle in simulation)
       maxE_index = i;
       maxE = mcParticle.getEnergy();
     }
   } // loop to find simHit with highest MCParticle energy.
 
-  const VTXdigi_tools::SimHitWrapper& simHitMaxE = simHits.at(maxE_index);
-  const dd4hep::rec::Vector3D simHitMaxE_pos_local = simHitMaxE.truthPos();
+  const VTXdigi_tools::SimHitWrapper& simHit = simHits.at(maxE_index);
+
+  // extrapolate the simHit position to the depleted region depth centre (ie. the charge collection depth)
+  // and compute the residuals to the digiHits
+  // (necessary in case ddsim is ran with collectSingleDeposits=True)
+  const dd4hep::rec::Vector3D simHit_pos_global = VTXdigi_tools::ConvertVector(simHit.hitPtr()->getPosition());
+  const dd4hep::rec::Vector3D simHit_pos_local =VTXdigi_tools::Trafo_global_local(simHit_pos_global, trafoMatrix);
+
+  // transform momentum to local coordinates
+  double momentum_global[3] = {
+    static_cast<double>(simHit.hitPtr()->getMomentum().x),
+    static_cast<double>(simHit.hitPtr()->getMomentum().y),
+    static_cast<double>(simHit.hitPtr()->getMomentum().z)
+  };
+  double momentum_local[3];
+  trafoMatrix.MasterToLocalVect(momentum_global, momentum_local);
+  dd4hep::rec::Vector3D simHit_dir_local = 1/std::abs(momentum_local[2]) * dd4hep::rec::Vector3D(momentum_local[0], momentum_local[1], momentum_local[2]); // normalised to w-component
+
+  // const float targetDepth = m_chargeCollector->GetChargeCollectionDepthCenter();
+  float targetDepth;
+  if (m_LUT_shiftTruthPos.value())
+    targetDepth = m_chargeCollector->GetChargeCollectionDepthCenter();
+  else
+    targetDepth = 0.f;
+  const float t = (targetDepth - simHit_pos_local.z()) / simHit_dir_local.z();
+  const dd4hep::rec::Vector3D simHit_pos_local_corr = simHit_pos_local + t * simHit_dir_local; // extrapolated position to the charge collection depth
 
   ++(*m_hist1d.at(layer).at(hist1d_highestEnergyParticleOnSensor_energy))[ maxE ]; // in GeV
 
@@ -1531,7 +1556,7 @@ void VTXdigi_Modular::FillHistograms_perSensor(const std::vector<VTXdigi_tools::
     const dd4hep::rec::Vector3D pos_global = VTXdigi_tools::ConvertVector(digiHit.getPosition());
     const dd4hep::rec::Vector3D pos_local = VTXdigi_tools::Trafo_global_local(pos_global, trafoMatrix);
 
-    const dd4hep::rec::Vector3D residual_local = simHitMaxE_pos_local - pos_local; // residual = predicted - observed
+    const dd4hep::rec::Vector3D residual_local = simHit_pos_local_corr - pos_local; // residual = predicted - observed
 
     ++(*m_hist1d.at(layer).at(hist1d_residual_u_maxEParticleOnSensor))[ residual_local.x()*1000.f ];
     ++(*m_hist1d.at(layer).at(hist1d_residual_v_maxEParticleOnSensor))[ residual_local.y()*1000.f ];

@@ -15,6 +15,7 @@ SimHitWrapper::SimHitWrapper(
 
   m_charge = static_cast<float>(m_simTrackerHit.getEDep() * (dd4hep::GeV / dd4hep::keV) * kChargePerkeV); // convert energy deposit (in keV) to number of electrons
   m_layerNumber = GetLayer(m_volumeID, cellIdDecoder);
+  // m_truthPos is set later in VTXdigi_Modular::operator() via SetTruthPos(...) to avoid double-calculating the sensor transformation matrix
 
   // check if the simHit was caused by a primary, secondary or delta particle
   if ( m_simTrackerHit.isProducedBySecondary() ) {
