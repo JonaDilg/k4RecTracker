@@ -119,7 +119,7 @@ private:
   Gaudi::Property<std::string> m_geoServiceName{this, "GeoSvcName", "GeoSvc", "The name of the GeoSvc instance"};
   Gaudi::Property<std::string> m_encodingStringVariable{this, "EncodingStringParameterName", "GlobalTrackerReadoutID", "The name of the DD4hep constant that contains the Encoding string for tracking detectors"};
   Gaudi::Property<bool> m_clusterize{this, "Clusterize", true, "Whether to clusterize hits or not. If false, each pixel hit is output as a separate trackerHit. If true, the cluster centre and total charge are output."};
-  // TODO: Add option to only use end-pixels in long clusters
+  Gaudi::Property<bool> m_clusterizeEndPixelsOnly{this, "ClusterizeEndPixelsOnly", false, "Use only the end pixels of long clusters to compute the cluster position. Reduces the uncertainty due to Landau fluctuations in the central pixels. Only used if Clusterize is true. Defaults to false."};
 
 
   /* -- Properties mainlyrelated to the main event loop -- */

@@ -325,14 +325,39 @@ inline bool HitMap::_OutOfBounds(std::array<int, 2> i_uv) const {
 
 /* -- Clusterization -- */
 
-std::array<float, 2> Cluster::ComputeCoG() const {
+std::array<float, 2> Cluster::ComputeCoG(const bool clusterizeEndPixelsOnly) const {
   std::array<float, 2> pos{0.f, 0.f};
-  for (const Pixel* pix : pixels) {
-    pos[0] += pix->index[0] * pix->charge;
-    pos[1] += pix->index[1] * pix->charge;
+  if (!clusterizeEndPixelsOnly) {
+    for (const Pixel* pix : pixels) {
+      pos[0] += pix->index[0] * pix->charge;
+      pos[1] += pix->index[1] * pix->charge;
+    }
+    pos[0] /= charge;
+    pos[1] /= charge;
+    return pos;
   }
-  pos[0] /= charge;
-  pos[1] /= charge;
+
+  for (int axis = 0; axis < 2; ++axis) {
+    // find pixels with min and max index along the axis
+    int index_min = std::numeric_limits<int>::max();
+    int index_max = std::numeric_limits<int>::min();
+    for (const Pixel* pix : pixels) {
+      index_min = std::min(index_min, pix->index[axis]);
+      index_max = std::max(index_max, pix->index[axis]);
+    }
+    // compute charge-weighted average of the min and max pixels
+    float charge_min=0.f, charge_max=0.f;
+    for (const Pixel* pix : pixels) {
+      if (pix->index[axis] == index_min) charge_min += pix->charge;
+      if (pix->index[axis] == index_max) charge_max += pix->charge;
+    }
+    float offset = (charge_max - charge_min) / (charge_min + charge_max) / 2.f; // offset in range [-0.5, 0.5] to shift the CoG towards the pixel with more charge
+
+    pos[axis] = static_cast<float>(index_min + index_max) * 0.5f + offset;
+
+    (static_cast<float>(index_min)*charge_min + static_cast<float>(index_max)*charge_max) / (charge_min + charge_max);
+  }
+
   return pos;
 }
 

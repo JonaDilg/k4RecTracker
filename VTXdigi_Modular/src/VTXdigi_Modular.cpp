@@ -1263,7 +1263,7 @@ void VTXdigi_Modular::CreateDigiHits(edm4hep::TrackerHitPlaneCollection& digiHit
     digiHit.setEDep(cluster.charge / VTXdigi_tools::kChargePerkeV);
 
     // position
-    std::array<float, 2> clusterPos_index = cluster.ComputeCoG();
+    std::array<float, 2> clusterPos_index = cluster.ComputeCoG(m_clusterizeEndPixelsOnly.value());
 
     const dd4hep::rec::Vector3D clusterPos_local = VTXdigi_tools::Trafo_pixIndex_local(clusterPos_index, m_sensorLength, m_pixelPitch, m_chargeCollector->GetChargeCollectionDepthCenter());
     const dd4hep::rec::Vector3D clusterPos_global = VTXdigi_tools::Trafo_local_global(clusterPos_local, trafoMatrix);
