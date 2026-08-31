@@ -2,6 +2,7 @@
 #pragma once
 
 #include "TGeoMatrix.h"
+#include "TRandom3.h"
 
 struct VTXdigi_Modular;
 
@@ -13,7 +14,7 @@ namespace VTXdigi_tools {
 class IChargeCollector {
 public:
   virtual ~IChargeCollector() = default;
-  virtual void FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix) const = 0;
+  virtual void FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix, TRandom3& randomGen) const = 0;
 
   float GetChargeCollectionDepthCenter() const { return m_chargeCollectionDepthCenter; }
 

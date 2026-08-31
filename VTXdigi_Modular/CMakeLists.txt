@@ -18,6 +18,7 @@ gaudi_add_module(${PackageName}
   k4FWCore::k4FWCore
   k4FWCore::k4Interface
   DD4hep::DDRec
+  ROOT::MathCore
 )
 
 target_include_directories(${PackageName} PUBLIC

@@ -1,6 +1,7 @@
 // VTXdigi_Modular/src/VTXdigi_Modular.cpp
 #include "VTXdigi_Modular.h"
 #include "VTXdigi_tools.h"
+#include <GaudiKernel/RndmGenerators.h>
 
 DECLARE_COMPONENT(VTXdigi_Modular)
 
@@ -53,6 +54,10 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
     return std::make_tuple(edm4hep::TrackerHitPlaneCollection(), edm4hep::TrackerHitSimTrackerHitLinkCollection());
   }
 
+  // seed RNG (done per-evt so it is thread-safe & reproducible)
+  const auto uniqueID = m_uniqueIDService->getUniqueID(headers, name());
+  TRandom3 randomGen(uniqueID);
+
   /* TODO: Implement fast digitization, where simHit pos is simply smeared by a Gaussian. But:
   * that would make a lot of the init etc unnecessary, so maybe keep it in a separate class? We cannot simply add a ChargeCollector implementation to do this, because ChargeCollectors act on pixels, but fast digitization acts on the position itself (ofc we could emulate this in clusters, but thats incredibly inefficient and stinks) */
 
@@ -94,7 +99,7 @@ std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitL
       simHit.SetTruthPos(VTXdigi_tools::Trafo_global_local(pos_global, trafoMatrix)); // do this only now to not compute the trafo matrix twice. TruthPos might be shifted by the charge collection algorithm later.
       debug() << "     - Processing simHit, charge dep. " << simHit.charge() << " e at (" << simHit.truthPos().x() << ", " << simHit.truthPos().y() << ", " << simHit.truthPos().z() << ") local, (" << pos_global.x() << ", " << pos_global.y() << ", " << pos_global.z() << ") global" << endmsg;
 
-      m_chargeCollector->FillHit(simHit, hitMap, trafoMatrix); // uses the selected charge collection method
+      m_chargeCollector->FillHit(simHit, hitMap, trafoMatrix, randomGen); // uses the selected charge collection method
 
       if (m_debugHistograms.value())
         FillHistograms_perSimHit(simHit);
@@ -148,6 +153,11 @@ void VTXdigi_Modular::InitServicesAndGeometry() {
     info() << "Cluster position uncertainty set to (" << m_positionUncertainty.value().at(0) << ", " << m_positionUncertainty.value().at(1) << ", " << m_positionUncertainty.value().at(2) << ") mm and (" << m_positionUncertainty.value().at(3) << ", " << m_positionUncertainty.value().at(4) << ", " << m_positionUncertainty.value().at(5) << ") mm for cluster lengths of (1, 2, 3), in u and v direction, respectively." << endmsg;
   else
     throw GaudiException("Property ClusterPositionUncertainty must be either empty (for charge-weighted estimation), have exactly 2 values (for fixed uncertainty in u and v), or six values (for cluster-length based estimation).", "VTXdigi_Modular::InitServicesAndGeometry()", StatusCode::FAILURE);
+
+  m_uniqueIDService = service("uidSvc", false);
+  if (!m_uniqueIDService)
+    throw GaudiException("Unable to get UniqueIDGenSvc from name 'uidSvc'.", "VTXdigi_Modular::InitServicesAndGeometry()", StatusCode::FAILURE);
+
 
   m_randomService = service("RndmGenSvc", false);
   if (!m_randomService)

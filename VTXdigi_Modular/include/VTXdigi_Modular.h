@@ -25,6 +25,9 @@
 #include "DDRec/CellIDPositionConverter.h"
 #include <memory>
 
+// ROOT
+#include "TRandom3.h"
+
 /** @class VTXdigi_Modular
  *
  * Creates trackerHits from simHits. Produces clusters from simHits, outputs either the cluster centre or all hits in the cluster as digitized hits.
@@ -64,12 +67,8 @@ struct VTXdigi_Modular final : k4FWCore::MultiTransformer <std::tuple<edm4hep::T
 
   inline bool LUT_shiftTruthPos() const { return m_LUT_shiftTruthPos.value(); }
 
-  /** @brief Draw a random number for charge smearing
-   * FIXME: this is not thread safe, but I don't know how this is done in Gaudi (while retaining thread safety & reproducibility with a given seed).
-  */
-  inline float DrawChargeSmearingNumber() const { return static_cast<float>(m_rndm_charge()); }
-
   inline std::string LutFileName() const { return m_LUT_FileName; }
+
 
 private:
 
@@ -147,6 +146,7 @@ private:
 
   SmartIF<IRndmGenSvc> m_randomService;
   SmartIF<IGeoSvc> m_geoService;
+  SmartIF<IUniqueIDGenSvc> m_uniqueIDService;
   std::unique_ptr<dd4hep::DDSegmentation::BitFieldCoder> m_cellIdDecoder;
   std::unique_ptr<dd4hep::rec::CellIDPositionConverter> m_cellIDPositionConverter;
   const dd4hep::Detector* m_detector = nullptr;

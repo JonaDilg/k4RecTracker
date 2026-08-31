@@ -11,8 +11,17 @@ class HitMap; // forward-declaration for include/VTXdigi_tools.h
 using Index_pix = std::array<int, 2>;
 using Index_inPix = std::array<int, 3>;
 
-constexpr float kPathLengthTolerance = 1.05f; // tolerance factor for how much longer the computed path can be compared to the Geant4 path length. If the computed path is longer than the Geant4 path, either the linear path approximation breaks down, or the particle begins or ends inside the sensor volume
-constexpr float kLutEntryMinimum = 1.e-5f; // LUT entries below this value are set to zero, to minimise unnecessary computations in hot loop. result is quite sensitive to this, so choose carefully. 1e-5 seems to be a good compromise between accuracy and performance for the TPSCo 65nm CIS LUT
+constexpr float kPathLengthTolerance = 1.05f; // tolerance factor for how much longer the computed path can be compared to the Geant4 path length.
+// (If the computed path is longer than the Geant4 path, either the linear path approximation breaks down, or the particle begins or ends inside the sensor volume)
+
+constexpr float kLutEntryMinimum = 1.e-5f; // LUT entries below this value are set to zero, to minimise unnecessary computations in hot loop.
+// result is quite sensitive to this, so choose carefully. 1e-5 seems to be a good compromise between accuracy and performance for the TPSCo 65nm CIS LUT
+
+constexpr float kLambda = 0.000212f; // mean distance between interactions of a MIP in silicon in mm
+// source: https://doi.org/10.1088/1748-0221/12/11/P11017 (at https://arxiv.org/abs/1706.04883)
+
+constexpr float kFano = 0.115f; // theoretical Fano factor for silicon
+// source: https://doi.org/10.1103%2FPhysRevB.22.5565
 
 /** @brief holds pixel indices i and in-pixel bin indices j (identifying one voxel of the charge-sharing grid) */
 struct Index_voxel {
@@ -103,7 +112,7 @@ public:
 
   explicit ChargeCollector_LUT(const VTXdigi_Modular& digitizer);
 
-  void FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix) const override;
+  void FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix, TRandom3& randomGen) const override;
 
 private:
 
@@ -123,13 +132,13 @@ private:
 class ChargeCollector_SinglePixel : public IChargeCollector {
 public:
   explicit ChargeCollector_SinglePixel(const VTXdigi_Modular& digitizer);
-  void FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix) const override;
+  void FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix, TRandom3& randomGen) const override;
 };
 
 class ChargeCollector_Debug : public IChargeCollector {
 public:
   explicit ChargeCollector_Debug(const VTXdigi_Modular& digitizer);
-  void FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix) const override;
+  void FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix, TRandom3& randomGen) const override;
 };
 
 
@@ -139,7 +148,7 @@ public:
 class ChargeCollector_Drift : public IChargeCollector {
 public:
   explicit ChargeCollector_Drift(const VTXdigi_Modular& digitizer);
-  void FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix) const override;
+  void FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix, TRandom3& randomGen) const override;
 };
 
 } // namespace VTXdigi_tools

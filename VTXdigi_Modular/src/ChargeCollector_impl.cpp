@@ -90,7 +90,7 @@ bool ConstructPath(Path& path, const SimHitWrapper& simHit, const TGeoHMatrix& t
       path.entry = path.entry + t[0] * path.travel;
       path.travel = (t[1] - t[0]) * path.travel;
     }
-    else [[unlikely]] {
+    else {
       /* invalid clipping, shouldn't happen */
       digitizer.warning() << "VTXdigi_tools::Path::Path() - invalid clipping factors t = [" << t[0] << ", " << t[1] << "]. Path might lie completely outside the sensor." << endmsg;
       digitizer.debug() << " -> entry (" << path.entry.x() << ", " << path.entry.y() << ", " << path.entry.z() << ") mm, exit (" << path.entry.x() + path.travel.x() << ", " << path.entry.y() + path.travel.y() << ", " << path.entry.z() + path.travel.z() << ") mm, sensor dim. (+-" << digitizer.ActiveVolumeDimensions().at(0)/2 << ", +-" << digitizer.ActiveVolumeDimensions().at(1)/2 << ") mm" << endmsg;
@@ -366,10 +366,10 @@ void LookupTable::SetAllMatrices(const std::vector<float>& weights) {
 int LookupTable::FindIndex (const Index_inPix& j, const int col, const int row) const {
   if (j[0] < 0 || j[0] >= m_binCount[0]
     || j[1] < 0 || j[1] >= m_binCount[1]
-    || j[2] < 0 || j[2] >= m_binCount[2] ) [[unlikely]] {
+    || j[2] < 0 || j[2] >= m_binCount[2] ) {
     throw std::runtime_error("VTXdigi_tools::LookupTable::FindIndex: in-pix bin out of range");
   }
-  if (col < 0 || col >= m_matrixSize || row < 0 || row >= m_matrixSize) [[unlikely]] {
+  if (col < 0 || col >= m_matrixSize || row < 0 || row >= m_matrixSize) {
     throw std::runtime_error("VTXdigi_tools::LookupTable::FindIndex: col or row out of range");
   }
 
@@ -409,7 +409,7 @@ ChargeCollector_LUT::ChargeCollector_LUT(const VTXdigi_Modular& digitizer) : ICh
   m_digitizer.info() << " - ChargeCollector_LUT constructed successfully." << endmsg;
 }
 
-void ChargeCollector_LUT::FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix) const {
+void ChargeCollector_LUT::FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix, TRandom3& randomGen) const {
   /* Amanatides-Woo voxel traversal ("A Fast Voxel Traversal Algorithm for Ray Tracing", 1987):
    * walk the path boundary-to-boundary through the fine grid of LUT voxels (pixel grid x in-pixel bins).
    * Each voxel receives charge proportional to the exact chord length of the path inside it, so there is
@@ -418,94 +418,56 @@ void ChargeCollector_LUT::FillHit(const SimHitWrapper& simHit, HitMap& hitMap, c
    * the next voxel-boundary crossing and tDelta the t needed to cross one full voxel. */
 
   Path path;
-  if (!ConstructPath(path, simHit, trafoMatrix, m_digitizer)) [[unlikely]]
+  if (!ConstructPath(path, simHit, trafoMatrix, m_digitizer))
     return;
 
   if (m_shiftTruthPos) {
     MoveTruthPosition(simHit, path); // shifts the sim hit position to the depth in the sensor where most charge is collected, to get usesful residual plots.
   }
 
-  const Index_inPix binCount = m_LUT.GetBinCount();
-  const std::array<float, 3> entry = {static_cast<float>(path.entry.x()), static_cast<float>(path.entry.y()), static_cast<float>(path.entry.z())};
-  const std::array<float, 3> travel = {static_cast<float>(path.travel.x()), static_cast<float>(path.travel.y()), static_cast<float>(path.travel.z())};
 
-  std::array<int, 3> g; // fine-grid bin index per axis, of the voxel the path currently is in
-  std::array<int, 3> step; // direction (+1/-1) the bin index moves along each axis
-  std::array<float, 3> tMax; // t at which the path crosses the next bin boundary on each axis
-  std::array<float, 3> tDelta; // t needed to cross one full bin on each axis
-  int iterationsLeft = 1; // upper bound on voxels crossed; guards against float quirks causing an endless loop
+  int NDepositions = static_cast<int>(randomGen.Poisson(path.travel.r() / kLambda));
 
-  for (int ax = 0; ax < 3; ++ax) {
-    /* entry/exit lie exactly on sensor faces by construction (ConstructPath), so float rounding can place
-     * them epsilon outside the grid -> clamp the index instead of trusting floor */
-    g[ax] = std::clamp(static_cast<int>(std::floor((entry[ax] - m_gridOrigin[ax]) / m_cellSize[ax])), 0, m_gridBinCount[ax] - 1);
+  std::vector<float> depositionCharges;
+  depositionCharges.reserve(NDepositions);
+  float totalDepositedCharge = 0;
 
-    if (travel[ax] != 0.f) {
-      step[ax] = (travel[ax] > 0.f) ? 1 : -1;
-      tDelta[ax] = m_cellSize[ax] / std::abs(travel[ax]);
-      const float nextBoundary = m_gridOrigin[ax] + (g[ax] + (step[ax] > 0 ? 1 : 0)) * m_cellSize[ax];
-      tMax[ax] = std::max(0.f, (nextBoundary - entry[ax]) / travel[ax]); // clamp to 0: the index clamping above can put the first boundary marginally behind the entry point
-      iterationsLeft += static_cast<int>(std::abs(travel[ax]) / m_cellSize[ax]) + 2;
-    }
-    else {
-      /* no movement along this axis. Explicit infinity avoids 0/0 = NaN when the entry lies exactly on a bin boundary */
-      step[ax] = 0;
-      tDelta[ax] = std::numeric_limits<float>::infinity();
-      tMax[ax] = std::numeric_limits<float>::infinity();
-    }
+  for (int i_dep = 0; i_dep < NDepositions; ++i_dep) {
+    // FIXME: use same charge for all depositions for now. Replace with drawing from straggling distribution later.
+    // double chargeTruth = static_cast<double>(simHit.charge()) / static_cast<double>(NDepositions);
+    // int charge = static_cast<int>(std::round(chargeTruth));
+
+    float thickness = 1.f;
+    int charge = static_cast<int>(randomGen.Landau(67.*thickness, 4.9*thickness*2.));
+
+    depositionCharges.push_back(charge);
+    totalDepositedCharge += charge;
   }
 
-  Index_voxel vox;
-  vox.i = {g[0] / binCount[0], g[1] / binCount[1]};
-  vox.j = {g[0] % binCount[0], g[1] % binCount[1], g[2]};
+  // rescale charges to ensure total charge is equal to simHit.charge()
+  // will be important when drawing each depositions charge from the straggling distribution
+  const float chargeScaler = simHit.charge() / static_cast<float>(totalDepositedCharge);
+  for (int i_dep = 0; i_dep < NDepositions; ++i_dep) {
+    // smear deposited charge with Fano factor
+    float charges_truth = depositionCharges[i_dep] * chargeScaler;
+    float probablity = 1.0 - kFano;
+    ULong64_t charges = gRandom->Binomial(std::round(charges_truth / probablity), probablity);
 
-  /* TODO: currently, DistributeVoxelCharge is THE bottleneck. Optimise this by collecting all entries from each vector in a local size x size matrix, and copy that to the hitMap once all voxels in a pixel have been filled. The carry logic below tells us exactly when the pixel changes. */
+    // draw random position along the path for this deposition
+    float t = randomGen.Rndm(); // uniform in (0,1)
+    if (t < 0.f || t > 1.f)
+      throw std::runtime_error("ChargeCollector_LUT::FillHit: Random position along path is out of bounds: t = " + std::to_string(t) + ". Must be in [0,1].");
 
-  float tPrev = 0.f;
-  while (iterationsLeft-- > 0) {
-    const int ax = (tMax[0] < tMax[1]) ? (tMax[0] < tMax[2] ? 0 : 2) : (tMax[1] < tMax[2] ? 1 : 2); // axis of the nearest boundary crossing. Corner ties are broken arbitrarily: the "wrong" voxel is visited with zero chord length, ie. zero charge
-    const float tNext = std::min(tMax[ax], 1.f);
+    dd4hep::rec::Vector3D depositionPos = path.entry + t * path.travel;
 
-    if (tNext > tPrev) // skip zero-length chords (from corner ties or a path starting exactly on a boundary)
-      DistributeVoxelCharge(hitMap, vox, (tNext - tPrev) * simHit.charge(), simHit);
+    Index_voxel voxel;
+    voxel.i = Trafo_local_pixIndex(depositionPos, m_digitizer.PixelPitch(), m_digitizer.PixelCount());
+    voxel.j = Trafo_local_inpixIndex(depositionPos, m_LUT.GetBinCount(), m_digitizer.PixelPitch(), m_digitizer.ActiveVolumeDimensions());
 
-    if (tMax[ax] >= 1.f)
-      break; // path ends inside the current voxel
+    DistributeVoxelCharge(hitMap, voxel, charges, simHit);
+  }
 
-    tPrev = tMax[ax];
-    tMax[ax] += tDelta[ax];
-
-    g[ax] += step[ax];
-    if (g[ax] < 0 || g[ax] >= m_gridBinCount[ax]) [[unlikely]] {
-      /* stepped off the grid. The path is clipped to the sensor volume, so this only happens through
-       * float rounding at the exit face, where the remaining charge is O(epsilon) -> drop it */
-      if (1.f - tPrev > 1.e-4f)
-        m_digitizer.warning() << "ChargeCollector_LUT::FillHit: path left the voxel grid with a path fraction of " << 1.f - tPrev << " remaining. Dropping the corresponding charge." << endmsg;
-      break;
-    }
-
-    /* advance pixel & in-pixel indices with carry (keeps j in range without div/mod or float floor) */
-    if (ax == 2) {
-      vox.j[2] += step[2]; // w has no pixel index; g range check above keeps j[2] valid
-    }
-    else {
-      vox.j[ax] += step[ax];
-      int& pixelIndex = (ax == 0) ? vox.i[0] : vox.i[1];
-      if (vox.j[ax] == binCount[ax]) {
-        vox.j[ax] = 0;
-        ++pixelIndex;
-      }
-      else if (vox.j[ax] < 0) {
-        vox.j[ax] = binCount[ax] - 1;
-        --pixelIndex;
-      }
-    }
-  } // voxel traversal
-
-  if (iterationsLeft < 0) [[unlikely]]
-    m_digitizer.warning() << "ChargeCollector_LUT::FillHit: voxel traversal did not terminate within the expected number of steps. Some charge may have been dropped." << endmsg;
-
-  m_digitizer.FillHistograms_fromChargeCollector_perSimHit(simHit.layer(), path.travel, path.lengthG4, simHit.truthPos(), trafoMatrix); // fill histograms once per sim hit, with info from the path (eg. travel vector, which contains info on the angle of incidence)
+  m_digitizer.FillHistograms_fromChargeCollector_perSimHit(simHit.layer(), path.travel, path.lengthG4, simHit.truthPos(), trafoMatrix);
 }
 
 void ChargeCollector_LUT::DistributeVoxelCharge(HitMap& hitMap, const Index_voxel& i_vox, const float charge, const SimHitWrapper& simHit) const {
@@ -558,8 +520,9 @@ ChargeCollector_SinglePixel::ChargeCollector_SinglePixel(const VTXdigi_Modular& 
   m_digitizer.debug() << "ChargeCollector_SinglePixel constructed." << endmsg;
 }
 
-void ChargeCollector_SinglePixel::FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix) const {
+void ChargeCollector_SinglePixel::FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix, TRandom3& randomGen) const {
   (void) trafoMatrix; // Not used in this implementation of ChargeCollector, but we need to keep it as argument to conform to the interface. Silences the unused parameter warning.
+  (void) randomGen;
 
   const std::array<int, 2> i_uv = Trafo_local_pixIndex(simHit.truthPos(), m_digitizer.PixelPitch(), m_digitizer.PixelCount());
 
@@ -573,8 +536,9 @@ ChargeCollector_Debug::ChargeCollector_Debug(const VTXdigi_Modular& digitizer) :
   m_digitizer.debug() << "ChargeCollector_Debug constructed." << endmsg;
 }
 
-void ChargeCollector_Debug::FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix) const {
+void ChargeCollector_Debug::FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix, TRandom3& randomGen) const {
   (void) trafoMatrix; // Not used in this implementation of ChargeCollector, but we need to keep it as argument to conform to the interface. Silences the unused parameter warning.
+  (void) randomGen;
 
   const dd4hep::rec::Vector3D pos_local = simHit.truthPos();
   const float charge = simHit.charge();
