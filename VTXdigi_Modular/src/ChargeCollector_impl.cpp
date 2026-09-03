@@ -437,8 +437,14 @@ void ChargeCollector_LUT::FillHit(const SimHitWrapper& simHit, HitMap& hitMap, c
     // double chargeTruth = static_cast<double>(simHit.charge()) / static_cast<double>(NDepositions);
     // int charge = static_cast<int>(std::round(chargeTruth));
 
-    float thickness = 1.f;
-    int charge = static_cast<int>(randomGen.Landau(67.*thickness, 4.9*thickness*2.));
+    int charge;
+    while (true) {
+      charge = static_cast<int>(randomGen.Landau(67., 10.));
+      if (charge > 0) break;
+
+      // using a MaxDeposition only makes sense once the function is tuned to resemble reality (and not just my best guess)
+      // if (charge > 0 && charge < kMaxDepositionCharge) break;
+    }
 
     depositionCharges.push_back(charge);
     totalDepositedCharge += charge;
@@ -451,7 +457,7 @@ void ChargeCollector_LUT::FillHit(const SimHitWrapper& simHit, HitMap& hitMap, c
     // smear deposited charge with Fano factor
     float charges_truth = depositionCharges[i_dep] * chargeScaler;
     float probablity = 1.0 - kFano;
-    ULong64_t charges = gRandom->Binomial(std::round(charges_truth / probablity), probablity);
+    ULong64_t charges = randomGen.Binomial(std::round(charges_truth / probablity), probablity);
 
     // draw random position along the path for this deposition
     float t = randomGen.Rndm(); // uniform in (0,1)

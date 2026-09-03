@@ -11,7 +11,7 @@ class HitMap; // forward-declaration for include/VTXdigi_tools.h
 using Index_pix = std::array<int, 2>;
 using Index_inPix = std::array<int, 3>;
 
-constexpr float kPathLengthTolerance = 1.05f; // tolerance factor for how much longer the computed path can be compared to the Geant4 path length.
+constexpr float kPathLengthTolerance = 1.0001f; // tolerance factor for how much longer the computed path can be compared to the Geant4 path length.
 // (If the computed path is longer than the Geant4 path, either the linear path approximation breaks down, or the particle begins or ends inside the sensor volume)
 
 constexpr float kLutEntryMinimum = 1.e-5f; // LUT entries below this value are set to zero, to minimise unnecessary computations in hot loop.
@@ -19,6 +19,9 @@ constexpr float kLutEntryMinimum = 1.e-5f; // LUT entries below this value are s
 
 constexpr float kLambda = 0.000212f; // mean distance between interactions of a MIP in silicon in mm
 // source: https://doi.org/10.1088/1748-0221/12/11/P11017 (at https://arxiv.org/abs/1706.04883)
+
+constexpr int kMaxDepositionCharge = 15.f * 273.f; // a range-cut of 3 um corresponds to a energy of ~15 keV
+// source: ESTAR https://physics.nist.gov/PhysRefData/Star/Text/ESTAR.html
 
 constexpr float kFano = 0.115f; // theoretical Fano factor for silicon
 // source: https://doi.org/10.1103%2FPhysRevB.22.5565
