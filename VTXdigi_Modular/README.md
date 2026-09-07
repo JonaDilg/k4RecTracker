@@ -15,9 +15,42 @@ Clusterisation is included in the digitizer because as of now, there are no stan
 Produces EDM4hep `TrackerHitPlane` hits (referred to as digiHits), either per pixel hit or per cluster (via charge-weighted centroid & η-correction). For each `TrackerHitPlane`, creates a `TrackerHitSimTrackerHitLink` to each `SimTrackerHit` that contributed charge to any involved pixel.
 
 ### Charge Collector Implementations
-The algorithm allows a choice of different charge collectors, defined by the `ChargeCollectionMethod` Gaudi property.
+The algorithm allows a choice of different charge collectors, defined by the `ChargeCollectionMethod` Gaudi property. These are implemented as separate classes which the digitizer interacrs with via the `IChargeCollector` interface.
 
-Each charge collector implements a method to distribute a simHit's deposited charge to the pixels around that simHit.
+Each charge collector implements a method to distribute a simHit's deposited charge to the pixels around that simHit. A common class to calculate a linear approximation of the simHit's path through the sensor is provided, parametrising it as `p(t) = p0 + v*t` with `t` in `[0,1]`. The exact position of each charge deposited in the sensor is not written to disk, this is a limitation of of the Key4hep framework (because of the prohibitively high storage cost and the minimal performance gain of doing so).
+
+#### `LookupTable`
+[@Reference paper] TODO:
+
+Shares charge among a hits surrounding pixels according to a lookup table (ie. charge transport map). The pixel is binned into a 3d grid. For each of the 3d bins ("voxels"), the map stores the probability for a charge deposited in this voxel to be collected in each of the urrounding pixels. These transport maps are generated from detailed simulations performed in sensor R&D, but could also be generated from experimental data.
+
+<img src="LookupTableSchematic.svg" width="700" alt="Schematic of distributing a hit's charge to the surrounding pixels according to a lookup table (charge transport map).">
+
+Lookup tables from the OCTOPUS Project modelling MAPS in TPSCo 65nm CIS will be made publicly available in the future (hopefully early 2027). A tool to generate dummy LUTs can be found in the `test` folder.
+
+The alorithm has been tested thoroughly to reproduce Allpix Squared's results. The same detector geometry and transport map were used with the OCTOPUS Project's models. The results can be found in the TODO: [@reference] and in the talks listed below.
+
+**Physics simulation**
+
+For each simHit, the path through the sensor is approximated as a straight line (intrinsic limitation of Key4hep). Then, the charge deposition and collection are modelled as follows:
+
+- The number of discrete depositions is drawn from a Poisson distribution with mean `N = pathLength / meanFreePath`
+- For each deposition
+  - a random position along the path is drawn
+  - a random energy deposition is drawn from a distribution (TODO: simple Landau for now, this is incorrect but seems to work pretty well for now).
+- The sum of all energy depositions is normalised to the simHit's total deposited energy.
+- The deposition energies are converted to charges (ie. e-h pairs) via `charge = energy / 3.65 eV`, smeared by a sub-Poissonian with Fano factor 0.112.
+- Finally, each charge deposition is distributed to pixels according to the LUT analytically by simply multiplying the charge by each pixel's collection probability. (Drawing a random number for each charge would be very expensive. Because of large number of charges in a simHit, the effect of randomly sampling the matrix would be minimal.)
+
+**Notes about the implementation**
+
+- **Requires** Gaudi property `LookupTableFile`.
+
+- A validation of this algorithm on test beam data is in progress.
+
+- Further information:
+    - The talk in the DRD3 WG4 (Simulation) Meeting contains more information on the implementation and preliminary results: [@talk 2026-03](https://indico.cern.ch/event/1658032/contributions/6968509/attachments/3239139/5776904/2026-03-16_DRD3-WG4.pdf)
+    - Even more preliminary results were presented in the FCC Full Sim Working Meeting: [@talk 2025-12](https://indico.cern.ch/event/1613709/contributions/6814309/attachments/3190168/5677333/2025-12-10_FCC-FullSym-WorkingMeeting-3.pdf)
 
 #### `SinglePixel`
 Simply fills the total charge deposited by a simHit into the pixel that the simHit position lies in. This will always produce a cluster size of 1 pix/clst and the binary sensor resolution expectation of pitch/sqrt(12) (at vertical incidence angles).
@@ -28,19 +61,6 @@ Takes the pixel that the simHit position lies in as the central pixel. Deposited
 - 30% charge to the pixel to the right of the central pixel (index `[i_u+1,i_v]`)
 - 10% charge each to the two pixels above the central pixel (indices `[i_u,i_v+1]` and `[i_u,i_v+2]`)
 This is intended to be used to test the correct `u`/`v` orientation of the pixel
-
-#### `LookupTable`
-Shares charge among a hits surrounding pixels according to a lookup table. These lookup tables are generated from detailed simulations performed in sensor R&D. A particle's path through the sensor is walked voxel-by-voxel (Amanatides-Woo traversal), depositing charge in each LUT voxel in proportion to the exact chord length the path travels through it. (This is exact regardless of voxel size and needs no step-length parameter anymore).
-
-- **Requires** Gaudi property `LookupTableFile`.
-
-- A validation of this algorithm on test beam data is in progress.
-
-- An exemplary, Gaussian based LUT is placed in the examples folder.
-
-- Further information:
-    - This talk in the DRD3 WG4 (Simulation) Meeting contains more information on the implementation and preliminary results: https://indico.cern.ch/event/1658032/contributions/6968509/attachments/3239139/5776904/2026-03-16_DRD3-WG4.pdf
-    - A previous version of the talk was also held in the FCC Full Sim Working Meeting: https://indico.cern.ch/event/1613709/contributions/6814309/attachments/3190168/5677333/2025-12-10_FCC-FullSym-WorkingMeeting-3.pdf
 
 ## Gaudi Properties
 - `SubDetectorName` - Name of the subdetector (eg. `Vertex`)
@@ -74,6 +94,10 @@ Shares charge among a hits surrounding pixels according to a lookup table. These
 - `LookupTableFile` - Lookup table file, necessary for the `LookupTable` charge collector.
 - `LookupTableIgnorePitch` - Ignore the sensor thickness and pixel pitch values stored in the LUT file. Useful for slightly stretching/shrinking the LUT to fit curved sensors where the sensor length is not an integer multiple of the pixel pitch. Defaults to `False`, where an error is thrown if the values from the detector geometry do not match the LUT file. If set to `True`, only a warning is printed is in case of a mismatch.
 -
+
+---
+## Physics simulation
+
 
 ---
 ## Steering File Changes

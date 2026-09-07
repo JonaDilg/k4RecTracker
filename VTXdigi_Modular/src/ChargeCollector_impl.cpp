@@ -409,13 +409,8 @@ ChargeCollector_LUT::ChargeCollector_LUT(const VTXdigi_Modular& digitizer) : ICh
   m_digitizer.info() << " - ChargeCollector_LUT constructed successfully." << endmsg;
 }
 
+
 void ChargeCollector_LUT::FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix, TRandom3& randomGen) const {
-  /* Amanatides-Woo voxel traversal ("A Fast Voxel Traversal Algorithm for Ray Tracing", 1987):
-   * walk the path boundary-to-boundary through the fine grid of LUT voxels (pixel grid x in-pixel bins).
-   * Each voxel receives charge proportional to the exact chord length of the path inside it, so there is
-   * no discretization error and no step-length parameter (unlike the segment-splitting this replaces).
-   * The path is parametrized as pos(t) = entry + t*travel with t in [0,1]. Per axis, tMax holds the t of
-   * the next voxel-boundary crossing and tDelta the t needed to cross one full voxel. */
 
   Path path;
   if (!ConstructPath(path, simHit, trafoMatrix, m_digitizer))
@@ -475,6 +470,91 @@ void ChargeCollector_LUT::FillHit(const SimHitWrapper& simHit, HitMap& hitMap, c
 
   m_digitizer.FillHistograms_fromChargeCollector_perSimHit(simHit.layer(), path.travel, path.lengthG4, simHit.truthPos(), trafoMatrix);
 }
+/*
+void ChargeCollector_LUT::FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix, TRandom3& randomGen) const {
+
+  Path path;
+  if (!ConstructPath(path, simHit, trafoMatrix, m_digitizer)) [[unlikely]]
+    return;
+
+  if (m_shiftTruthPos) {
+    MoveTruthPosition(simHit, path); // shifts the sim hit position to the depth in the sensor where most charge is collected, to get usesful residual plots.
+  }
+
+  const Index_inPix binCount = m_LUT.GetBinCount();
+  const std::array<float, 3> entry = {static_cast<float>(path.entry.x()), static_cast<float>(path.entry.y()), static_cast<float>(path.entry.z())};
+  const std::array<float, 3> travel = {static_cast<float>(path.travel.x()), static_cast<float>(path.travel.y()), static_cast<float>(path.travel.z())};
+
+  std::array<int, 3> g; // fine-grid bin index per axis, of the voxel the path currently is in
+  std::array<int, 3> step; // direction (+1/-1) the bin index moves along each axis
+  std::array<float, 3> tMax; // t at which the path crosses the next bin boundary on each axis
+  std::array<float, 3> tDelta; // t needed to cross one full bin on each axis
+  int iterationsLeft = 1; // upper bound on voxels crossed; guards against float quirks causing an endless loop
+
+  for (int ax = 0; ax < 3; ++ax) {
+    g[ax] = std::clamp(static_cast<int>(std::floor((entry[ax] - m_gridOrigin[ax]) / m_cellSize[ax])), 0, m_gridBinCount[ax] - 1);
+
+    if (travel[ax] != 0.f) {
+      step[ax] = (travel[ax] > 0.f) ? 1 : -1;
+      tDelta[ax] = m_cellSize[ax] / std::abs(travel[ax]);
+      const float nextBoundary = m_gridOrigin[ax] + (g[ax] + (step[ax] > 0 ? 1 : 0)) * m_cellSize[ax];
+      tMax[ax] = std::max(0.f, (nextBoundary - entry[ax]) / travel[ax]); // clamp to 0: the index clamping above can put the first boundary marginally behind the entry point
+      iterationsLeft += static_cast<int>(std::abs(travel[ax]) / m_cellSize[ax]) + 2;
+    }
+    else {
+      step[ax] = 0;
+      tDelta[ax] = std::numeric_limits<float>::infinity();
+      tMax[ax] = std::numeric_limits<float>::infinity();
+    }
+  }
+
+  Index_voxel vox;
+  vox.i = {g[0] / binCount[0], g[1] / binCount[1]};
+  vox.j = {g[0] % binCount[0], g[1] % binCount[1], g[2]};
+
+  float tPrev = 0.f;
+  while (iterationsLeft-- > 0) {
+    const int ax = (tMax[0] < tMax[1]) ? (tMax[0] < tMax[2] ? 0 : 2) : (tMax[1] < tMax[2] ? 1 : 2); // axis of the nearest boundary crossing. Corner ties are broken arbitrarily: the "wrong" voxel is visited with zero chord length, ie. zero charge
+    const float tNext = std::min(tMax[ax], 1.f);
+
+    if (tNext > tPrev) // skip zero-length chords (from corner ties or a path starting exactly on a boundary)
+      DistributeVoxelCharge(hitMap, vox, (tNext - tPrev) * simHit.charge(), simHit);
+
+    if (tMax[ax] >= 1.f)
+      break; // path ends inside the current voxel
+
+    tPrev = tMax[ax];
+    tMax[ax] += tDelta[ax];
+
+    g[ax] += step[ax];
+    if (g[ax] < 0 || g[ax] >= m_gridBinCount[ax]) [[unlikely]] {
+      if (1.f - tPrev > 1.e-4f)
+        m_digitizer.warning() << "ChargeCollector_LUT::FillHit: path left the voxel grid with a path fraction of " << 1.f - tPrev << " remaining. Dropping the corresponding charge." << endmsg;
+      break;
+    }
+
+    if (ax == 2) {
+      vox.j[2] += step[2]; // w has no pixel index; g range check above keeps j[2] valid
+    }
+    else {
+      vox.j[ax] += step[ax];
+      int& pixelIndex = (ax == 0) ? vox.i[0] : vox.i[1];
+      if (vox.j[ax] == binCount[ax]) {
+        vox.j[ax] = 0;
+        ++pixelIndex;
+      }
+      else if (vox.j[ax] < 0) {
+        vox.j[ax] = binCount[ax] - 1;
+        --pixelIndex;
+      }
+    }
+  } // voxel traversal
+
+  if (iterationsLeft < 0) [[unlikely]]
+    m_digitizer.warning() << "ChargeCollector_LUT::FillHit: voxel traversal did not terminate within the expected number of steps. Some charge may have been dropped." << endmsg;
+
+  m_digitizer.FillHistograms_fromChargeCollector_perSimHit(simHit.layer(), path.travel, path.lengthG4, simHit.truthPos(), trafoMatrix); // fill histograms once per sim hit, with info from the path (eg. travel vector, which contains info on the angle of incidence)
+} */
 
 void ChargeCollector_LUT::DistributeVoxelCharge(HitMap& hitMap, const Index_voxel& i_vox, const float charge, const SimHitWrapper& simHit) const {
 
