@@ -2,6 +2,9 @@
 #include "DD4hep/DetFactoryHelper.h"
 #include "DD4hep/Readout.h"
 
+#include <algorithm>
+#include <limits>
+
 DECLARE_COMPONENT(VTXdigitizerDetailed)
 
 VTXdigitizerDetailed::VTXdigitizerDetailed(const std::string& aname, ISvcLocator* asvcLoc)
@@ -772,6 +775,13 @@ void VTXdigitizerDetailed::generate_output(const edm4hep::SimTrackerHit& hit,
   int CountAfterThreshold = 0;
   int nPixels = 0;
 
+  // Cluster size (pixels above threshold) and extent in local x (u) and y (v)
+  int nPixelsAboveThreshold = 0;
+  int minX = std::numeric_limits<int>::max();
+  int maxX = std::numeric_limits<int>::min();
+  int minY = std::numeric_limits<int>::max();
+  int maxY = std::numeric_limits<int>::min();
+
   debug() << "------ Pixel map per cluster (hit_map) ------" << endmsg;
   // Loop over hit map to apply threshold and accumulate weights
   // loop to load the weights per x and y layers
@@ -799,6 +809,12 @@ void VTXdigitizerDetailed::generate_output(const edm4hep::SimTrackerHit& hit,
         Qix[ix.first] += weight;
         Qiy[iy.first] += weight;
         sumWeights += weight;
+
+        ++nPixelsAboveThreshold;
+        minX = std::min(minX, x);
+        maxX = std::max(maxX, x);
+        minY = std::min(minY, y);
+        maxY = std::max(maxY, y);
       }
     }
   } // end loop over y
@@ -906,6 +922,14 @@ void VTXdigitizerDetailed::generate_output(const edm4hep::SimTrackerHit& hit,
 
   output_digi_hit.setCellID(cellID);
 
+  if (m_clusterSizeInDigiHitType.value()) {
+    // bits 0-7: cluster length in u, bits 8-15: length in v, bits 16-23: total size. Each saturates at 255.
+    const int lengthU = std::min(maxX - minX + 1, 0xFF);
+    const int lengthV = std::min(maxY - minY + 1, 0xFF);
+    const int size = std::min(nPixelsAboveThreshold, 0xFF);
+    output_digi_hit.setType(lengthU | (lengthV << 8) | (size << 16));
+  }
+
   // Set sensor directions
   output_digi_hit.setU(u_direction);
   output_digi_hit.setV(v_direction);
@@ -924,6 +948,7 @@ void VTXdigitizerDetailed::generate_output(const edm4hep::SimTrackerHit& hit,
           << output_digi_hit.getPosition().z << ")" << endmsg;
   debug() << "Time (ns) : " << output_digi_hit.getTime() << endmsg;
   debug() << "CellID : " << output_digi_hit.getCellID() << endmsg;
+  debug() << "Type : " << output_digi_hit.getType() << endmsg;
   debug() << "Vector U Theta : " << u_direction[0] << endmsg;
   debug() << "Vector U Phi : " << u_direction[1] << endmsg;
   debug() << "Vector V Theta : " << v_direction[0] << endmsg;

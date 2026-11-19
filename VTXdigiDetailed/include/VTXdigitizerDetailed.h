@@ -111,6 +111,11 @@ private:
   // Threshold smearing in electron
   Gaudi::Property<float> m_ThresholdSmearing{this, "ThresholdSmearing", 0.0,
                                              "Sigma of Threshold Gaussian Smearing in e (default: 0.0)"};
+  // Write cluster size to the digiHit's type field
+  Gaudi::Property<bool> m_clusterSizeInDigiHitType{
+      this, "ClusterSizeInDigiHitType", true,
+      "Write the cluster size to the digiHit's type field, 8 bits each: bits 0-7 = cluster length in u, "
+      "bits 8-15 = cluster length in v, bits 16-23 = total cluster size (each saturates at 255). Defaults to true."};
 
   // Normal Vector direction in sensor local frame (normal to sensor surface) (initialised during the first hit in
   // primary_ionization -> should be the same in the full sub-detector)
